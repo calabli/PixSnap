@@ -6,11 +6,14 @@ import PixSnapCore
 /// neighbors; closing shrinks the card back into its photo. Everything moves on system springs and
 /// starts from wherever the previous motion was, so quick presses never jump. It never becomes key,
 /// so the clothesline keeps the keyboard (space, arrows, Return, Esc). Clicking the picture floats
-/// it; clicking around it closes the preview.
+/// it; clicking around it closes the preview; dragging the picture takes it to another app.
 @MainActor
 final class PhotoPreviewWindow: NSPanel {
     var onPick: ((HistoryEntry) -> Void)?
     var onClose: (() -> Void)?
+    /// The picture is being dragged out: the view to drag from, its frame and look there, the
+    /// mouse event that started it.
+    var onDragOut: ((HistoryEntry, NSView, CGRect, NSImage, NSEvent) -> Void)?
 
     /// The capture being shown; nil while hidden or closing.
     private(set) var entry: HistoryEntry?
@@ -48,6 +51,7 @@ final class PhotoPreviewWindow: NSPanel {
 
         let content = ClickView()
         content.onClick = { [weak self] point in self?.clicked(at: point) }
+        content.onDrag = { [weak self] event, start in self?.dragged(event, from: start) }
         contentView = content
 
         backdrop.material = .fullScreenUI
@@ -305,6 +309,31 @@ final class PhotoPreviewWindow: NSPanel {
         rect.offsetBy(dx: -frame.minX, dy: -frame.minY)
     }
 
+    /// Out of the way while the picture is dragged elsewhere: it travels with the mouse, and the
+    /// screen behind it should be visible to drop onto.
+    private func dragged(_ event: NSEvent, from start: CGPoint) {
+        guard let entry, let card, card.frame.contains(start),
+              let contents = card.sublayers?.first?.contents, CFGetTypeID(contents as CFTypeRef) == CGImage.typeID else { return }
+        let image = NSImage(cgImage: contents as! CGImage, size: card.frame.size)
+        guard let content = contentView else { return }
+        // Hidden rather than closed: the drag's source view lives in this window until it ends.
+        isDraggingOut = true
+        alphaValue = 0
+        ignoresMouseEvents = true
+        onDragOut?(entry, content, card.frame, image, event)
+    }
+
+    /// The picture is on its way to another app.
+    private(set) var isDraggingOut = false
+
+    /// The drag that started here is over: the preview is done too.
+    func endDragOut() {
+        guard isDraggingOut else { return }
+        isDraggingOut = false
+        dismiss(animated: false)
+        alphaValue = 1
+    }
+
     private func clicked(at point: CGPoint) {
         if let card, card.frame.contains(point), let entry {
             onPick?(entry)
@@ -318,6 +347,9 @@ final class PhotoPreviewWindow: NSPanel {
 @MainActor
 private final class ClickView: NSView {
     var onClick: ((CGPoint) -> Void)?
+    /// Dragged a few points from `start`: the drag event and where the press was.
+    var onDrag: ((NSEvent, CGPoint) -> Void)?
+    private var pressedAt: CGPoint?
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -325,7 +357,22 @@ private final class ClickView: NSView {
         frame.contains(point) ? self : nil
     }
 
+    override func mouseDown(with event: NSEvent) {
+        pressedAt = convert(event.locationInWindow, from: nil)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = pressedAt else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard hypot(point.x - start.x, point.y - start.y) >= 6 else { return }
+        pressedAt = nil
+        onDrag?(event, start)
+    }
+
     override func mouseUp(with event: NSEvent) {
+        // A drag that went elsewhere isn't a click.
+        guard pressedAt != nil else { return }
+        pressedAt = nil
         onClick?(convert(event.locationInWindow, from: nil))
     }
 }

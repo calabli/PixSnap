@@ -54,6 +54,7 @@ final class NotchWindow: NSPanel {
         let preview = PhotoPreviewWindow(screenFrame: screenFrame, level: NSWindow.Level(rawValue: level.rawValue + 1))
         preview.onPick = { [weak self] entry in self?.pick(entry) }
         preview.onClose = { [weak self] in self?.preview.dismiss() }
+        preview.onDragOut = { [weak self] entry, view, frame, image, event in self?.dragOut(entry, from: view, frame: frame, image: image, event: event) }
         return preview
     }()
 
@@ -91,6 +92,7 @@ final class NotchWindow: NSPanel {
         clothesline.onPick = { [weak self] entry in self?.pick(entry) }
         clothesline.onClipClick = { [weak self] entry in self?.release(entry, velocity: CGVector(dx: 0, dy: 40)) }
         clothesline.menuForEntry = { [weak self] entry in self?.menu(for: entry) }
+        clothesline.onDragOut = { [weak self] entry, view, frame, image, event in self?.dragOut(entry, from: view, frame: frame, image: image, event: event) }
         basket.isHidden = true
         basket.onClick = { [weak self] in self?.toggleBasketPanel() }
         content.wantsLayer = true
@@ -295,7 +297,8 @@ final class NotchWindow: NSPanel {
             break
         }
         phase = .closing
-        preview.dismiss(animated: false)
+        // A preview being dragged from stays until its drag is over (it's hidden meanwhile).
+        if !preview.isDraggingOut { preview.dismiss(animated: false) }
         closeBasketPanel()
         setBasketShown(false)
         stopWatchingOutsideClicks()
@@ -404,6 +407,23 @@ final class NotchWindow: NSPanel {
         } else if let entry = clothesline.hoveredEntry {
             release(entry, velocity: CGVector(dx: 0, dy: 380))
         }
+    }
+
+    // MARK: Dragging out
+
+    /// Takes a copy of the capture to another app. The lines go up as it leaves, so the whole
+    /// screen is there to drop onto; if nothing takes it, they come back down.
+    ///
+    /// The window's `ignoresMouseEvents` is never touched: setting it back to false makes AppKit
+    /// stop letting clicks through the transparent parts, and this window covers the screen.
+    private func dragOut(_ entry: HistoryEntry, from view: NSView, frame: CGRect, image: NSImage, event: NSEvent) {
+        guard let capture = HistoryLibrary.shared.loadCapture(entry) else { return }
+        CaptureDrag.begin(capture, image: image, from: frame, in: view, event: event) { [weak self] taken in
+            guard let self else { return }
+            preview.endDragOut()
+            if !taken { openNow() }
+        }
+        collapse()
     }
 
     // MARK: Favorites

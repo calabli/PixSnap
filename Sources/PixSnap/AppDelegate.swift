@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setUpStatusItem()
         Task { await ScreenCapturer.shared.warmUp() }
         HistoryLibrary.shared.cleanUp()
+        ImageExporter.removeOldTemporaryFiles()
         notch.rebuild()
         settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
 

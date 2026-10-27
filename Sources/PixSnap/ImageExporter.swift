@@ -68,11 +68,26 @@ enum ImageExporter {
         }
     }
 
-    /// Writes a file into Caches for dragging into other apps.
+    /// Where files dragged into other apps are written. Apps that take a file usually copy it
+    /// right away, so these only need to last a while.
+    private static let dragFolder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("com.pixsnap.PixSnap/Drag", isDirectory: true)
+
+    /// Writes a PNG for dragging into other apps, named like a saved capture. Each drag gets its
+    /// own folder, so the name never needs a " (2)".
     static func temporaryFile(for capture: Capture) throws -> URL {
-        let folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.pixsnap.PixSnap/Drag", isDirectory: true)
-        return try write(capture, into: folder)
+        try write(capture, into: dragFolder.appendingPathComponent(UUID().uuidString, isDirectory: true))
+    }
+
+    /// Removes dragged files from earlier days.
+    static func removeOldTemporaryFiles() {
+        let manager = FileManager.default
+        guard let folders = try? manager.contentsOfDirectory(at: dragFolder, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let dayAgo = Date().addingTimeInterval(-24 * 60 * 60)
+        for folder in folders {
+            let modified = (try? folder.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if modified < dayAgo { try? manager.removeItem(at: folder) }
+        }
     }
 
     private static func write(_ capture: Capture, into folder: URL) throws -> URL {

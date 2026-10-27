@@ -5,6 +5,8 @@ import PixSnapCore
 /// tools that draw right on the image, plus favorite (when it's in history), pin, edit mode, copy,
 /// save and close. With no tool
 /// selected, dragging the image moves it; double-click opens edit mode; Esc drops the tool, then closes.
+/// To take it to another app (with its annotations), drag the 拖出 handle in the bar, or ⌘-drag the
+/// image, which also works while pinned.
 ///
 /// Pinned (图钉): the bar goes away and only the image stays on top of everything, still draggable.
 /// Hovering shows a pin in its corner that unpins it; right-click has the other actions.
@@ -71,6 +73,7 @@ final class FloatingCaptureWindow: NSPanel {
         bar.onUndo = { [weak self] in self?.canvas.undo() }
         bar.onPin = { [weak self] in self?.setPinned(true) }
         bar.onFavorite = { [weak self] in self?.toggleFavorite() }
+        bar.onDragOut = { [weak self] view, event in self?.dragOut(from: view, event: event) }
         bar.onEdit = { [weak self] in self?.edit() }
         bar.onCopy = { [weak self] in self?.copyImage() }
         bar.onSave = { [weak self] in self?.saveImage() }
@@ -180,6 +183,42 @@ final class FloatingCaptureWindow: NSPanel {
 
     override var canBecomeKey: Bool { true }
 
+    // MARK: Dragging out
+
+    /// The ⌘-press waiting to see whether it becomes a drag.
+    private var commandPress: NSEvent?
+
+    /// ⌘-drag on the image takes it out instead of moving the window or drawing.
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown where event.modifierFlags.contains(.command) && canvas.frame.contains(event.locationInWindow):
+            commandPress = event
+            return
+        case .leftMouseDragged where commandPress != nil:
+            guard let press = commandPress,
+                  hypot(event.locationInWindow.x - press.locationInWindow.x, event.locationInWindow.y - press.locationInWindow.y) >= 4,
+                  let content = contentView else { return }
+            commandPress = nil
+            dragOut(from: content, event: press)
+            return
+        case .leftMouseUp where commandPress != nil:
+            commandPress = nil
+            return
+        default:
+            break
+        }
+        super.sendEvent(event)
+    }
+
+    /// A PNG of the capture as it looks now, annotations and all.
+    private func dragOut(from view: NSView, event: NSEvent) {
+        guard let result = renderedCapture(), let content = contentView else { return }
+        let image = NSImage(cgImage: result.image, size: result.pointSize)
+        CaptureDrag.begin(result, image: image, from: view.convert(canvas.frame, from: content), in: view, event: event) { [weak self] taken in
+            if taken { self?.feedback.show("已拖出") }
+        }
+    }
+
     override func cancelOperation(_ sender: Any?) {
         close()
     }
@@ -271,6 +310,8 @@ private final class ActionBar: NSVisualEffectView {
     var onUndo: (() -> Void)?
     var onPin: (() -> Void)?
     var onFavorite: (() -> Void)?
+    /// The 拖出 handle was dragged: the handle and the mouse event that started it.
+    var onDragOut: ((NSView, NSEvent) -> Void)?
     var onEdit: (() -> Void)?
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
@@ -315,6 +356,7 @@ private final class ActionBar: NSVisualEffectView {
             button("钉住", symbol: "pin", tip: "钉在屏幕上：隐藏操作栏，只留图片，可拖动", action: #selector(pin)),
             button("编辑模式", symbol: "slider.horizontal.3", tip: "更多编辑：颜色、粗细、裁剪等（双击图片）", action: #selector(edit)),
             button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
+            dragHandle(),
             button("保存", symbol: "square.and.arrow.down", tip: "保存为 PNG，选择保存位置", action: #selector(save)),
             button("关闭", symbol: "xmark", tip: "关闭（Esc）", action: #selector(closeCapture)),
         ]
@@ -366,6 +408,16 @@ private final class ActionBar: NSVisualEffectView {
         return button
     }
 
+    /// Drag it into a chat, mail, Finder or any app that takes images.
+    private func dragHandle() -> NSView {
+        let handle = DragHandle()
+        handle.onDrag = { [weak self, weak handle] event in
+            guard let handle else { return }
+            self?.onDragOut?(handle, event)
+        }
+        return handle
+    }
+
     private func divider() -> NSView {
         let line = NSBox()
         line.boxType = .separator
@@ -390,6 +442,72 @@ private final class ActionBar: NSVisualEffectView {
     @objc private func copyImage() { onCopy?() }
     @objc private func save() { onSave?() }
     @objc private func closeCapture() { onClose?() }
+}
+
+/// "拖出": looks like the bar's other buttons, but it's dragged rather than clicked.
+@MainActor
+private final class DragHandle: NSView {
+    var onDrag: ((NSEvent) -> Void)?
+    private var pressedAt: CGPoint?
+    private let label: NSButton
+
+    init() {
+        // A borderless button draws the same icon-and-title as its neighbors; it doesn't take clicks.
+        label = NSButton(title: "拖出", image: NSImage(systemSymbolName: "hand.draw", accessibilityDescription: "拖出")!, target: nil, action: nil)
+        label.bezelStyle = .recessed
+        label.isBordered = false
+        label.imagePosition = .imageLeading
+        label.imageHugsTitle = true
+        label.font = .systemFont(ofSize: 12)
+        super.init(frame: .zero)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            heightAnchor.constraint(equalToConstant: 24),
+        ])
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        toolTip = "按住拖到微信、邮件、访达等应用（也可以按住 ⌘ 拖图片）"
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        frame.contains(point) ? self : nil
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .openHand)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor }
+    override func mouseExited(with event: NSEvent) { layer?.backgroundColor = nil }
+
+    override func mouseDown(with event: NSEvent) {
+        pressedAt = event.locationInWindow
+        NSCursor.closedHand.set()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = pressedAt,
+              hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y) >= 3 else { return }
+        pressedAt = nil
+        onDrag?(event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        pressedAt = nil
+    }
 }
 
 /// Reports when the mouse enters or leaves the window.

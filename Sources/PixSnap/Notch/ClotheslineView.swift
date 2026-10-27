@@ -10,6 +10,9 @@ final class ClotheslineView: NSView {
     var onPick: ((HistoryEntry) -> Void)?
     /// A photo's clip was clicked: it should be let go, into the basket.
     var onClipClick: ((HistoryEntry) -> Void)?
+    /// A photo was dragged far enough to take it to another app: the view to drag from, the
+    /// picture's frame and look there, and the mouse event that started it.
+    var onDragOut: ((HistoryEntry, NSView, CGRect, NSImage, NSEvent) -> Void)?
     /// Builds a photo's right-click menu.
     var menuForEntry: ((HistoryEntry) -> NSMenu?)?
 
@@ -136,6 +139,7 @@ final class ClotheslineView: NSView {
                 photo.setFrameOrigin(CGPoint(x: clip.x - photo.frame.width / 2, y: clip.y - photo.frame.height + PhotoView.clipOverhang))
                 photo.onPick = { [weak self] entry in self?.onPick?(entry) }
                 photo.onClipClick = { [weak self] entry in self?.onClipClick?(entry) }
+                photo.onDragOut = { [weak self] entry, view, frame, image, event in self?.onDragOut?(entry, view, frame, image, event) }
                 photo.menuProvider = { [weak self] entry in self?.menuForEntry?(entry) }
                 photo.onHover = { [weak self] entry, inside in
                     if inside {
@@ -242,7 +246,8 @@ private final class DayLabel: NSView {
 }
 
 /// One capture hanging from its clip. The swinging part is a layer anchored at the clip, so it
-/// rotates around the rope. Dragging the photo just tugs it, and it springs back. Clicking the clip
+/// rotates around the rope. A short drag tugs the photo and it springs back; a longer one takes a
+/// copy of it to another app (`onDragOut`). Clicking the clip
 /// (it opens a little under the mouse) asks for the photo to be let go (`onClipClick`): the clip
 /// stays on the rope and the photo falls.
 @MainActor
@@ -250,10 +255,13 @@ private final class PhotoView: NSView {
     var onPick: ((HistoryEntry) -> Void)?
     var onHover: ((HistoryEntry, Bool) -> Void)?
     var onClipClick: ((HistoryEntry) -> Void)?
+    var onDragOut: ((HistoryEntry, NSView, CGRect, NSImage, NSEvent) -> Void)?
     var menuProvider: ((HistoryEntry) -> NSMenu?)?
 
     /// How far the clip sticks up above the photo, onto the rope.
     static let clipOverhang: CGFloat = 8
+    /// Drag this far and the photo goes along to other apps, instead of just being tugged.
+    private static let dragOutDistance: CGFloat = 30
 
     let entry: HistoryEntry
     /// Only the empty clip is left on the line.
@@ -493,6 +501,14 @@ private final class PhotoView: NSView {
         let dx = point.x - start.x, dy = point.y - start.y
         guard moved || hypot(dx, dy) >= 4 else { return }
         drag = .pressed(start: start, moved: true)
+        if hypot(dx, dy) >= Self.dragOutDistance, let thumbnail {
+            drag = .none
+            let frame = pictureFrame
+            springBack()
+            onDragOut?(entry, self, CGRect(x: restPosition.x - frame.width / 2, y: restPosition.y - frame.height, width: frame.width, height: frame.height),
+                       NSImage(cgImage: thumbnail, size: frame.size), event)
+            return
+        }
         // Tugging stretches the photo a little, more and more stiffly; the wooden clip gives less.
         let give: CGFloat = isFavorite ? 0.5 : 1
         Motion.immediately {
