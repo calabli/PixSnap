@@ -3,20 +3,27 @@ import PixSnapCore
 
 /// History as clotheslines: one rope per day, newest day on top, each capture clipped to the rope
 /// like a photo, newest at the right. Photos sway gently, swing faster under the mouse, and drop in
-/// with a bounce when the panel opens. Clicking one hands it to `onPick`.
+/// with a bounce when the panel opens. Each photo keeps its capture's shape. Clicking one hands it
+/// to `onPick`.
 @MainActor
 final class ClotheslineView: NSView {
     var onPick: ((HistoryEntry) -> Void)?
 
+    /// The photo under the mouse, if any.
+    private(set) var hoveredEntry: HistoryEntry?
+
+    /// The captures on the lines in reading order: top line first, left to right.
+    var entries: [HistoryEntry] { photos.map(\.entry) }
+
     static let maximumDays = 3
-    private static let rowHeight: CGFloat = 124
+    /// Room for the tallest photo below the dip of the rope.
+    private static let rowHeight: CGFloat = 150
     private static let topPadding: CGFloat = 6
     private static let bottomPadding: CGFloat = 16
     private static let emptyHeight: CGFloat = 60
     /// The ropes run from screen edge to screen edge, pegged just inside it.
     private static let ropeInset: CGFloat = 10
     private static let ropeSag: CGFloat = 22
-    private static let photoSpacing: CGFloat = 110
 
     private let ropes = RopeView()
     private var photos: [PhotoView] = []
@@ -49,6 +56,7 @@ final class ClotheslineView: NSView {
         ropes.style = style
         photos.forEach { $0.removeFromSuperview() }
         photos = []
+        hoveredEntry = nil
         ropes.lines = []
         subviews.filter { $0 is DayLabel }.forEach { $0.removeFromSuperview() }
 
@@ -62,7 +70,7 @@ final class ClotheslineView: NSView {
 
         let ropeStart = Self.ropeInset
         let ropeEnd = bounds.width - Self.ropeInset
-        let capacity = max(1, Int((ropeEnd - ropeStart - 120) / Self.photoSpacing))
+        let ropeLength = ropeEnd - ropeStart
         var random = SeededRandom(seed: 7)
 
         for (row, day) in days.enumerated() {
@@ -76,23 +84,39 @@ final class ClotheslineView: NSView {
             addSubview(label)
 
             // The newest captures that fit, spread evenly along the rope.
-            let shown = day.entries.suffix(capacity)
-            for (index, entry) in shown.enumerated() {
-                let t = CGFloat(index + 1) / CGFloat(shown.count + 1)
-                let x = line.point(at: t).x
-                let y = line.point(at: t).y
+            let sizes = day.entries.map { ClotheslineLayout.photoSize(pixelWidth: $0.pixelWidth, pixelHeight: $0.pixelHeight) }
+            // Photos are 16pt wider than their picture, for the swing.
+            let count = max(1, ClotheslineLayout.fittingCount(widths: sizes.map { $0.width + 16 }, length: ropeLength))
+            let shown = Array(zip(day.entries, sizes).suffix(count))
+            let centers = ClotheslineLayout.centers(widths: shown.map { $0.1.width + 16 }, length: ropeLength)
+            for ((entry, size), center) in zip(shown, centers) {
+                let clip = line.point(at: center / ropeLength)
                 let photo = PhotoView(
                     entry: entry,
+                    size: size,
                     thumbnail: thumbnails(entry),
                     tilt: CGFloat(random.next(in: -0.06...0.06)),
                     period: random.next(in: 1.6...2.8)
                 )
-                photo.setFrameOrigin(CGPoint(x: x - photo.frame.width / 2, y: y - photo.frame.height + PhotoView.clipOverhang))
+                photo.setFrameOrigin(CGPoint(x: clip.x - photo.frame.width / 2, y: clip.y - photo.frame.height + PhotoView.clipOverhang))
                 photo.onPick = { [weak self] entry in self?.onPick?(entry) }
+                photo.onHover = { [weak self] entry, inside in
+                    if inside {
+                        self?.hoveredEntry = entry
+                    } else if self?.hoveredEntry == entry {
+                        self?.hoveredEntry = nil
+                    }
+                }
                 addSubview(photo)
                 photos.append(photo)
             }
         }
+    }
+
+    /// Where a photo's picture is on screen, for the preview to grow out of.
+    func screenRect(of entry: HistoryEntry) -> CGRect? {
+        guard let photo = photos.first(where: { $0.entry == entry }), let window else { return nil }
+        return window.convertToScreen(photo.convert(photo.pictureFrame, to: nil))
     }
 
     /// Photos fall onto their ropes one after another.
@@ -130,12 +154,11 @@ private final class DayLabel: NSView {
 @MainActor
 private final class PhotoView: NSView {
     var onPick: ((HistoryEntry) -> Void)?
-
-    static let photoSize = CGSize(width: 92, height: 64)
+    var onHover: ((HistoryEntry, Bool) -> Void)?
     /// How far the clip sticks up above the photo, onto the rope.
     static let clipOverhang: CGFloat = 8
 
-    private let entry: HistoryEntry
+    let entry: HistoryEntry
     private let hanger = CALayer()
     private let tilt: CGFloat
     private let period: Double
@@ -148,11 +171,10 @@ private final class PhotoView: NSView {
         return formatter
     }()
 
-    init(entry: HistoryEntry, thumbnail: NSImage?, tilt: CGFloat, period: Double) {
+    init(entry: HistoryEntry, size: CGSize, thumbnail: NSImage?, tilt: CGFloat, period: Double) {
         self.entry = entry
         self.tilt = tilt
         self.period = period
-        let size = Self.photoSize
         super.init(frame: CGRect(x: 0, y: 0, width: size.width + 16, height: size.height + Self.clipOverhang + 10))
         wantsLayer = true
         layer?.masksToBounds = false
@@ -188,7 +210,7 @@ private final class PhotoView: NSView {
 
         var tip = Self.dateFormatter.string(from: entry.createdAt)
         if let app = entry.sourceAppName { tip += " · \(app)" }
-        toolTip = "\(tip)\n点一下浮动到屏幕上"
+        toolTip = "\(tip)\n点一下浮动到屏幕上，按空格预览"
     }
 
     @available(*, unavailable)
@@ -226,8 +248,21 @@ private final class PhotoView: NSView {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { sway(fast: true) }
-    override func mouseExited(with event: NSEvent) { sway(fast: false) }
+    /// The picture's resting frame in this view, ignoring the swing.
+    var pictureFrame: CGRect {
+        CGRect(x: hanger.position.x - hanger.bounds.width / 2, y: hanger.position.y - hanger.bounds.height,
+               width: hanger.bounds.width, height: hanger.bounds.height)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        sway(fast: true)
+        onHover?(entry, true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        sway(fast: false)
+        onHover?(entry, false)
+    }
 
     override func mouseDown(with event: NSEvent) {
         mouseDownPoint = event.locationInWindow

@@ -6,7 +6,8 @@ import PixSnapCore
 /// Press and pull down: the clotheslines slide down from the top of the screen with the mouse; let go
 /// past the threshold, or just click, and they settle. There's no panel behind them — only ropes
 /// across the whole screen and the captures hanging from them. Esc, a click elsewhere (it passes
-/// through to what's underneath) or a click on the handle puts them away.
+/// through to what's underneath) or a click on the handle puts them away. Space previews the photo
+/// under the mouse in a large view; ← → step through the photos, Return floats the one shown.
 @MainActor
 final class NotchWindow: NSPanel {
     var onPick: ((HistoryEntry) -> Void)?
@@ -35,6 +36,12 @@ final class NotchWindow: NSPanel {
 
     private var phase = Phase.collapsed
     private var outsideClickMonitor: Any?
+    private lazy var preview: PhotoPreviewWindow = {
+        let preview = PhotoPreviewWindow(screenFrame: screenFrame, level: NSWindow.Level(rawValue: level.rawValue + 1))
+        preview.onPick = { [weak self] entry in self?.pick(entry) }
+        preview.onClose = { [weak self] in self?.preview.dismiss() }
+        return preview
+    }()
 
     /// Let go after pulling this far and the lines stay down.
     private static let openDistance: CGFloat = 90
@@ -67,10 +74,7 @@ final class NotchWindow: NSPanel {
         handle.onMouseUp = { [weak self] in self?.released() }
 
         clothesline.isHidden = true
-        clothesline.onPick = { [weak self] entry in
-            self?.collapse()
-            self?.onPick?(entry)
-        }
+        clothesline.onPick = { [weak self] entry in self?.pick(entry) }
         content.addSubview(clothesline)
         content.addSubview(handle)
         contentView = content
@@ -79,7 +83,49 @@ final class NotchWindow: NSPanel {
     override var canBecomeKey: Bool { true }
 
     override func cancelOperation(_ sender: Any?) {
+        if preview.entry != nil {
+            preview.dismiss()
+        } else {
+            collapse()
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard case .open = phase else { return super.keyDown(with: event) }
+        switch event.keyCode {
+        case 49: // space
+            if preview.entry != nil {
+                preview.dismiss()
+            } else if let entry = clothesline.hoveredEntry ?? clothesline.entries.last {
+                preview.show(entry, from: clothesline.screenRect(of: entry))
+            }
+        case 123, 124: // ← →
+            stepPreview(by: event.keyCode == 123 ? -1 : 1)
+        case 36, 76: // Return, Enter
+            if let entry = preview.entry { pick(entry) }
+        default:
+            super.keyDown(with: event)
+        }
+    }
+
+    /// Previews the newest photo without a key press (`--clothesline --preview`).
+    func previewNewest() {
+        guard case .open = phase, let entry = clothesline.entries.last else { return }
+        preview.show(entry, from: clothesline.screenRect(of: entry))
+    }
+
+    /// Shows the previous or next photo on the lines, in reading order.
+    private func stepPreview(by offset: Int) {
+        let entries = clothesline.entries
+        guard let current = preview.entry, let index = entries.firstIndex(of: current) else { return }
+        let next = min(max(index + offset, 0), entries.count - 1)
+        guard next != index else { return }
+        preview.show(entries[next], from: clothesline.screenRect(of: entries[next]))
+    }
+
+    private func pick(_ entry: HistoryEntry) {
         collapse()
+        onPick?(entry)
     }
 
     /// Brings the lines down without a gesture (menu bar item).
@@ -193,6 +239,7 @@ final class NotchWindow: NSPanel {
             break
         }
         phase = .closing
+        preview.dismiss(animated: false)
         stopWatchingOutsideClicks()
         handle.showsHint = false
         NSAnimationContext.runAnimationGroup({ context in
