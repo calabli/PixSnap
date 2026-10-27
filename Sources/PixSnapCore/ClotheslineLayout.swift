@@ -9,8 +9,9 @@ public enum ClotheslineLayout {
     public static let maximumPhotoSize = CGSize(width: 150, height: 90)
     /// Very long or very tall captures don't shrink to a sliver; they're cropped to this instead.
     public static let minimumPhotoSide: CGFloat = 26
-    /// The smallest space left between neighboring photos.
-    public static let minimumGap: CGFloat = 18
+    /// The smallest space left between neighboring photos, and between the end photos and the
+    /// rope's ends, like pegs spaced along a real line.
+    public static let minimumGap: CGFloat = 32
 
     /// The capture's shape, scaled to fit the photo box.
     public static func photoSize(pixelWidth: Int, pixelHeight: Int) -> CGSize {
