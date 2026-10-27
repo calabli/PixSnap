@@ -1,5 +1,6 @@
 import AppKit
 import PixSnapCore
+import PixSnapRender
 
 /// A full-screen window over one display that shows the frozen screenshot and lets the user
 /// drag a region or click a highlighted window.
@@ -38,20 +39,29 @@ final class SelectionView: NSView {
     var onCancel: (() -> Void)?
 
     private let image: NSImage
+    private let frozenImage: CGImage
     private let imageSize: CGSize
     private let windowRects: [CGRect]
     private var mouse: CGPoint
+    /// The magnifier only shows on the screen the cursor is on.
+    private var mouseInside: Bool
     private var dragStart: CGPoint?
     private var selection: CGRect?
     private var hoveredWindow: CGRect?
 
     init(frame: CGRect, image: CGImage, windowRects: [CGRect], initialMouse: CGPoint) {
         self.image = NSImage(cgImage: image, size: frame.size)
+        self.frozenImage = image
         self.imageSize = CGSize(width: image.width, height: image.height)
         self.windowRects = windowRects
         self.mouse = initialMouse
+        self.mouseInside = CGRect(origin: .zero, size: frame.size).contains(initialMouse)
         super.init(frame: frame)
         hoveredWindow = window(at: initialMouse)
+    }
+
+    private var pixelUnderMouse: PixelPoint {
+        SelectionGeometry.pixelPoint(forViewPoint: mouse, viewSize: bounds.size, imageSize: imageSize)
     }
 
     @available(*, unavailable)
@@ -78,12 +88,19 @@ final class SelectionView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         mouse = convert(event.locationInWindow, from: nil)
+        mouseInside = true
         if dragStart == nil { hoveredWindow = window(at: mouse) }
+        needsDisplay = true
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        mouseInside = true
         needsDisplay = true
     }
 
     override func mouseExited(with event: NSEvent) {
         hoveredWindow = nil
+        mouseInside = false
         needsDisplay = true
     }
 
@@ -116,11 +133,22 @@ final class SelectionView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if event.keyCode == 53 { // Esc
             onCancel?()
+        } else if modifiers.isEmpty, event.charactersIgnoringModifiers?.lowercased() == "c" {
+            copyColorUnderMouse()
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    /// C copies the hex color under the cursor (as shown in the magnifier) and ends the capture.
+    private func copyColorUnderMouse() {
+        guard let color = MagnifierRenderer.color(at: pixelUnderMouse, in: frozenImage) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(color.hex, forType: .string)
+        onCancel?()
     }
 
     private func window(at point: CGPoint) -> CGRect? {
@@ -141,15 +169,22 @@ final class SelectionView: NSView {
         NSColor.black.withAlphaComponent(0.35).setFill()
         mask.fill()
 
-        guard let highlight else {
+        if let highlight {
+            let border = NSBezierPath(rect: highlight.insetBy(dx: -0.75, dy: -0.75))
+            border.lineWidth = 1.5
+            NSColor.controlAccentColor.setStroke()
+            border.stroke()
+            drawSizeLabel(for: highlight)
+        } else {
             drawCrosshair()
-            return
         }
-        let border = NSBezierPath(rect: highlight.insetBy(dx: -0.75, dy: -0.75))
-        border.lineWidth = 1.5
-        NSColor.controlAccentColor.setStroke()
-        border.stroke()
-        drawSizeLabel(for: highlight)
+        drawMagnifier()
+    }
+
+    private func drawMagnifier() {
+        guard mouseInside, let context = NSGraphicsContext.current?.cgContext else { return }
+        let origin = MagnifierRenderer.origin(forCursor: mouse, in: bounds)
+        MagnifierRenderer.draw(image: frozenImage, pixel: pixelUnderMouse, at: origin, in: context)
     }
 
     private func drawCrosshair() {

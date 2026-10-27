@@ -22,6 +22,19 @@ public enum SelectionGeometry {
         rect.width >= minimumDragSize && rect.height >= minimumDragSize
     }
 
+    /// The image pixel (top-left origin) under a point in the view (bottom-left origin), clamped to the image.
+    public static func pixelPoint(forViewPoint point: CGPoint, viewSize: CGSize, imageSize: CGSize) -> PixelPoint {
+        guard viewSize.width > 0, viewSize.height > 0, imageSize.width >= 1, imageSize.height >= 1 else {
+            return PixelPoint(x: 0, y: 0)
+        }
+        let x = Int((point.x * imageSize.width / viewSize.width).rounded(.down))
+        let y = Int(((viewSize.height - point.y) * imageSize.height / viewSize.height).rounded(.down))
+        return PixelPoint(
+            x: min(max(x, 0), Int(imageSize.width) - 1),
+            y: min(max(y, 0), Int(imageSize.height) - 1)
+        )
+    }
+
     /// Maps a selection in view points to the matching pixel rect of the captured image,
     /// clipped to the image and rounded outward to whole pixels.
     public static func pixelRect(forViewRect rect: CGRect, viewSize: CGSize, imageSize: CGSize) -> CGRect {
