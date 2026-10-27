@@ -22,7 +22,9 @@ final class PhotoPreviewWindow: NSPanel {
     /// The picture being shown, at its final frame; motion is all in its transform.
     private var card: CALayer?
     private let caption = NSTextField(labelWithString: "")
-    private let hint = NSTextField(labelWithString: "← → 切换 · 空格或 Esc 关闭 · 点击图片浮动到屏幕上 · Delete 扔进洗衣篮")
+    private let hint = NSTextField(labelWithString: PhotoPreviewWindow.hintText)
+    private static let hintText = "← → 切换 · F 收藏 · 空格或 Esc 关闭 · 点击图片浮动到屏幕上 · Delete 扔进洗衣篮"
+    private var details = ""
     private var source: CGRect?
 
     private static let captionHeight: CGFloat = 48
@@ -86,7 +88,9 @@ final class PhotoPreviewWindow: NSPanel {
         var details = [Self.timeFormatter.string(from: entry.createdAt)]
         if let app = entry.sourceAppName { details.append(app) }
         details.append("\(entry.pixelWidth) × \(entry.pixelHeight)")
-        caption.stringValue = details.joined(separator: " · ")
+        self.details = details.joined(separator: " · ")
+        setCaption(favorite: HistoryLibrary.shared.isFavorite(entry.id))
+        hint.stringValue = Self.hintText
 
         let target = targetFrame(for: capture.pointSize)
         let incoming = makeCard(capture.image, frame: target)
@@ -115,6 +119,35 @@ final class PhotoPreviewWindow: NSPanel {
             incoming.add(fade(from: 0, to: 1, duration: 0.22), forKey: "fade")
             fadeChrome(in: true, below: target)
         }
+    }
+
+    /// The caption picks up or drops its star.
+    func showFavorite(_ favorite: Bool) {
+        setCaption(favorite: favorite)
+        layOutCaption(below: card?.frame ?? .zero)
+    }
+
+    /// A favorite can't be thrown away: the card shakes "no" and the hint says why.
+    func refuseToThrow() {
+        guard let card else { return }
+        let shake = CAKeyframeAnimation(keyPath: "position.x")
+        shake.values = [0, -14, 12, -8, 5, -2, 0]
+        shake.keyTimes = [0, 0.15, 0.32, 0.5, 0.68, 0.85, 1]
+        shake.duration = 0.45
+        shake.isAdditive = true
+        card.add(shake, forKey: "shake")
+        hint.stringValue = "已收藏的截图不能扔 · 先按 F 取消收藏"
+        hint.sizeToFit()
+        hint.frame = CGRect(x: 0, y: hint.frame.minY, width: frame.width, height: hint.frame.height)
+        let shown = entry
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self, self.entry == shown else { return }
+            self.hint.stringValue = Self.hintText
+        }
+    }
+
+    private func setCaption(favorite: Bool) {
+        caption.stringValue = favorite ? "★ 已收藏 · " + details : details
     }
 
     /// Shrinks back into the photo on the line, if it's still there, and hides.

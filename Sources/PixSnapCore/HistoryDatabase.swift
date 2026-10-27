@@ -119,6 +119,13 @@ public final class HistoryDatabase {
         return total
     }
 
+    /// Favorites on the lines, not counting the basket.
+    public func favoriteCount() throws -> Int {
+        var total = 0
+        try step("SELECT COUNT(*) FROM captures WHERE is_favorite = 1 AND trashed_at IS NULL", []) { total = Int(sqlite3_column_int64($0, 0)) }
+        return total
+    }
+
     public func setFavorite(_ isFavorite: Bool, id: UUID) throws {
         try run("UPDATE captures SET is_favorite = ? WHERE id = ?", [.integer(isFavorite ? 1 : 0), .text(id.uuidString)])
     }

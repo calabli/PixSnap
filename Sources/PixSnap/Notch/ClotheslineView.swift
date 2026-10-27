@@ -3,16 +3,15 @@ import PixSnapCore
 
 /// History as clotheslines: one rope per day, newest day on top, each capture clipped to the rope
 /// like a photo, newest at the right. Photos sway gently, swing faster under the mouse, and drop in
-/// with a bounce when the panel opens. Each photo keeps its capture's shape. Clicking one hands it
-/// to `onPick`.
+/// with a bounce when the panel opens. Each photo keeps its capture's shape, and the fewer there are
+/// on a line, the bigger they hang, up to the capture's own size. Clicking one hands it to `onPick`. Favorites hang from wooden clips that hold tight: they can't be pulled off.
 @MainActor
 final class ClotheslineView: NSView {
     var onPick: ((HistoryEntry) -> Void)?
-    /// A photo was pulled off its clip: the loose photo and its frame, in window coordinates.
-    var onPullOff: ((HistoryEntry, CALayer, CGRect) -> Void)?
-    /// The mouse, in window coordinates, while carrying a pulled-off photo and on letting go.
-    var onCarry: ((CGPoint) -> Void)?
-    var onLetGo: ((CGPoint) -> Void)?
+    /// A photo's clip was clicked: it should be let go, into the basket.
+    var onClipClick: ((HistoryEntry) -> Void)?
+    /// Builds a photo's right-click menu.
+    var menuForEntry: ((HistoryEntry) -> NSMenu?)?
 
     /// The photo under the mouse, if any.
     private(set) var hoveredEntry: HistoryEntry?
@@ -21,11 +20,15 @@ final class ClotheslineView: NSView {
     var entries: [HistoryEntry] { photos.filter { !$0.isEmpty }.map(\.entry) }
 
     static let maximumDays = 3
-    /// Room for the tallest photo below the dip of the rope.
-    private static let rowHeight: CGFloat = 150
+    /// Above the tallest photo on a line: the rope's distance from the top of its row, its dip,
+    /// the swing room under the photo and the space before the next line.
+    private static let rowOverhead: CGFloat = 24 + 22 + 10 + 16
+    /// The tallest a photo hangs, even alone on a big screen.
+    private static let largestPhoto: CGFloat = 420
+    /// Photos are this much wider than their picture, for the swing.
+    fileprivate static let photoPadding: CGFloat = 16
     private static let topPadding: CGFloat = 6
     private static let bottomPadding: CGFloat = 16
-    private static let emptyHeight: CGFloat = 60
     /// The ropes run from screen edge to screen edge, pegged just inside it.
     private static let ropeInset: CGFloat = 10
     private static let ropeSag: CGFloat = 22
@@ -34,9 +37,35 @@ final class ClotheslineView: NSView {
     private var photos: [PhotoView] = []
     private let message = NSTextField(labelWithString: "")
 
-    /// Height needed to show `dayCount` lines.
-    static func height(forDays dayCount: Int) -> CGFloat {
-        dayCount == 0 ? emptyHeight : topPadding + CGFloat(dayCount) * rowHeight + bottomPadding
+    /// What will hang where: the photos on each line with their sizes, and the height it all takes.
+    struct Plan {
+        struct Line {
+            let title: String
+            let photos: [(entry: HistoryEntry, size: CGSize)]
+            let height: CGFloat
+        }
+
+        let lines: [Line]
+        let height: CGFloat
+
+        /// Just room for the "nothing yet" message.
+        static let empty = Plan(lines: [], height: 60)
+    }
+
+    /// Fits `days` across a rope `width` wide, sharing `availableHeight` between the lines.
+    static func plan(_ days: [HistoryGrouping.Day], width: CGFloat, availableHeight: CGFloat) -> Plan {
+        guard !days.isEmpty else { return .empty }
+        let ropeLength = width - ropeInset * 2
+        let perLine = (availableHeight - topPadding - bottomPadding) / CGFloat(days.count) - rowOverhead
+        let maxHeight = min(largestPhoto, max(ClotheslineLayout.minimumRowHeight, perLine.rounded(.down)))
+        let lines = days.map { day in
+            let sources = day.entries.map { CGSize(width: CGFloat($0.pixelWidth) / CGFloat(max($0.scale, 1)),
+                                                   height: CGFloat($0.pixelHeight) / CGFloat(max($0.scale, 1))) }
+            let sizes = ClotheslineLayout.photoSizes(pointSizes: sources, ropeLength: ropeLength, maxHeight: maxHeight, padding: photoPadding)
+            let photos = zip(day.entries.suffix(sizes.count), sizes).map { (entry: $0, size: $1) }
+            return Plan.Line(title: day.title, photos: photos, height: (sizes.map(\.height).max() ?? 0) + rowOverhead)
+        }
+        return Plan(lines: lines, height: topPadding + lines.reduce(0) { $0 + $1.height } + bottomPadding)
     }
 
     override init(frame: CGRect) {
@@ -56,8 +85,9 @@ final class ClotheslineView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    /// Lays out `days`; `emptyMessage` shows when there's nothing to hang.
-    func show(_ days: [HistoryGrouping.Day], style: RopeStyle, thumbnails: (HistoryEntry) -> NSImage?, emptyMessage: String) {
+    /// Hangs what `plan` says; `emptyMessage` shows when there's nothing to hang. `image` supplies a
+    /// picture sharp enough for a given longest side in pixels.
+    func show(_ plan: Plan, style: RopeStyle, image: (HistoryEntry, CGFloat) -> CGImage?, emptyMessage: String) {
         ropes.style = style
         photos.forEach { $0.removeFromSuperview() }
         photos = []
@@ -65,21 +95,24 @@ final class ClotheslineView: NSView {
         ropes.lines = []
         subviews.filter { $0 is DayLabel }.forEach { $0.removeFromSuperview() }
 
-        message.isHidden = !days.isEmpty
+        message.isHidden = !plan.lines.isEmpty
         message.stringValue = emptyMessage
         message.sizeToFit()
         let messageSize = CGSize(width: message.frame.width + 28, height: message.frame.height + 14)
         message.frame = CGRect(x: ((bounds.width - messageSize.width) / 2).rounded(), y: ((bounds.height - messageSize.height) / 2).rounded(),
                                width: messageSize.width, height: messageSize.height)
-        guard !days.isEmpty else { return }
+        guard !plan.lines.isEmpty else { return }
 
         let ropeStart = Self.ropeInset
         let ropeEnd = bounds.width - Self.ropeInset
         let ropeLength = ropeEnd - ropeStart
         var random = SeededRandom(seed: 7)
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
 
-        for (row, day) in days.enumerated() {
-            let ropeY = bounds.maxY - Self.topPadding - CGFloat(row) * Self.rowHeight - 24
+        var rowTop = bounds.maxY - Self.topPadding
+        for day in plan.lines {
+            let ropeY = rowTop - 24
+            rowTop -= day.height
             let line = RopeView.Line(from: CGPoint(x: ropeStart, y: ropeY), to: CGPoint(x: ropeEnd, y: ropeY), sag: Self.ropeSag)
             ropes.lines.append(line)
 
@@ -88,29 +121,22 @@ final class ClotheslineView: NSView {
             label.setFrameOrigin(CGPoint(x: 24, y: ropeY + RopeView.clearance(for: style) + 4))
             addSubview(label)
 
-            // The newest captures that fit, spread evenly along the rope.
-            let sizes = day.entries.map { ClotheslineLayout.photoSize(pixelWidth: $0.pixelWidth, pixelHeight: $0.pixelHeight) }
-            // Photos are 16pt wider than their picture, for the swing.
-            let count = max(1, ClotheslineLayout.fittingCount(widths: sizes.map { $0.width + 16 }, length: ropeLength))
-            let shown = Array(zip(day.entries, sizes).suffix(count))
-            let centers = ClotheslineLayout.centers(widths: shown.map { $0.1.width + 16 }, length: ropeLength)
-            for ((entry, size), center) in zip(shown, centers) {
+            // Spread evenly along the rope.
+            let centers = ClotheslineLayout.centers(widths: day.photos.map { $0.size.width + Self.photoPadding }, length: ropeLength)
+            for ((entry, size), center) in zip(day.photos, centers) {
                 let clip = line.point(at: center / ropeLength)
                 let photo = PhotoView(
                     entry: entry,
                     size: size,
-                    thumbnail: thumbnails(entry),
-                    tilt: CGFloat(random.next(in: -0.06...0.06)),
+                    thumbnail: image(entry, max(size.width, size.height) * scale),
+                    isFavorite: entry.isFavorite,
+                    tilt: CGFloat(random.next(in: -0.06...0.06)) * min(1, 100 / size.height),
                     period: random.next(in: 1.6...2.8)
                 )
                 photo.setFrameOrigin(CGPoint(x: clip.x - photo.frame.width / 2, y: clip.y - photo.frame.height + PhotoView.clipOverhang))
                 photo.onPick = { [weak self] entry in self?.onPick?(entry) }
-                photo.onPullOff = { [weak self] entry, loose, frame in
-                    if self?.hoveredEntry == entry { self?.hoveredEntry = nil }
-                    self?.onPullOff?(entry, loose, frame)
-                }
-                photo.onCarry = { [weak self] point in self?.onCarry?(point) }
-                photo.onLetGo = { [weak self] point in self?.onLetGo?(point) }
+                photo.onClipClick = { [weak self] entry in self?.onClipClick?(entry) }
+                photo.menuProvider = { [weak self] entry in self?.menuForEntry?(entry) }
                 photo.onHover = { [weak self] entry, inside in
                     if inside {
                         self?.hoveredEntry = entry
@@ -130,12 +156,59 @@ final class ClotheslineView: NSView {
         return window.convertToScreen(photo.convert(photo.pictureFrame, to: nil))
     }
 
-    /// Takes a photo off its clip without dragging (the Delete key). Returns the loose photo and its
-    /// frame in window coordinates.
+    /// Opens the photo's clip and lets go of it. Returns the loose photo and its frame in window
+    /// coordinates, to fall into the basket.
     func pullOff(_ entry: HistoryEntry) -> (layer: CALayer, frame: CGRect)? {
         guard let photo = photos.first(where: { $0.entry == entry && !$0.isEmpty }) else { return nil }
         if hoveredEntry == entry { hoveredEntry = nil }
         return photo.pullOff()
+    }
+
+    // MARK: Favorites
+
+    func isFavorite(_ entry: HistoryEntry) -> Bool {
+        photos.first { $0.entry == entry }?.isFavorite ?? false
+    }
+
+    /// Swaps the photo's clip, with a little pop.
+    func setFavorite(_ isFavorite: Bool, for entry: HistoryEntry) {
+        photos.first { $0.entry == entry && !$0.isEmpty }?.setFavorite(isFavorite, animated: true)
+    }
+
+    /// A favorite was asked to go in the basket: it shakes its head, and a note under it says why.
+    func refuseToLetGo(of entry: HistoryEntry) {
+        guard let photo = photos.first(where: { $0.entry == entry && !$0.isEmpty }) else { return }
+        photo.shake()
+        let frame = photo.convert(photo.pictureFrame, to: self)
+        showNote("已收藏，木夹子夹得很牢 · 按 F 取消收藏", below: frame)
+    }
+
+    private var note: NSTextField?
+
+    private func showNote(_ text: String, below frame: CGRect) {
+        note?.removeFromSuperview()
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .white
+        label.alignment = .center
+        label.wantsLayer = true
+        label.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
+        label.layer?.cornerRadius = 9
+        label.sizeToFit()
+        let size = CGSize(width: label.frame.width + 20, height: 18)
+        label.frame = CGRect(x: min(max(frame.midX - size.width / 2, 8), bounds.width - size.width - 8), y: max(frame.minY - size.height - 10, 2),
+                             width: size.width, height: size.height)
+        addSubview(label)
+        note = label
+        label.layer?.add(Motion.spring("transform.translation.y", from: 6, to: 0, duration: 0.35), forKey: "rise")
+        label.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.15; label.animator().alphaValue = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak label] in
+            guard let label, self?.note === label else { return }
+            NSAnimationContext.runAnimationGroup({ $0.duration = 0.3; label.animator().alphaValue = 0 }, completionHandler: {
+                MainActor.assumeIsolated { label.removeFromSuperview() }
+            })
+        }
     }
 
     /// Photos fall onto their ropes one after another; with `only`, just that one.
@@ -169,29 +242,27 @@ private final class DayLabel: NSView {
 }
 
 /// One capture hanging from its clip. The swinging part is a layer anchored at the clip, so it
-/// rotates around the rope. Pulled down far enough, the clip lets go: the clip stays on the rope
-/// and the photo is handed over (`onPullOff`) to be carried and thrown into the basket.
+/// rotates around the rope. Dragging the photo just tugs it, and it springs back. Clicking the clip
+/// (it opens a little under the mouse) asks for the photo to be let go (`onClipClick`): the clip
+/// stays on the rope and the photo falls.
 @MainActor
 private final class PhotoView: NSView {
     var onPick: ((HistoryEntry) -> Void)?
     var onHover: ((HistoryEntry, Bool) -> Void)?
-    /// The photo came off its clip: the loose photo and its frame in window coordinates.
-    var onPullOff: ((HistoryEntry, CALayer, CGRect) -> Void)?
-    /// While carrying the photo off, and on letting go: the mouse in window coordinates.
-    var onCarry: ((CGPoint) -> Void)?
-    var onLetGo: ((CGPoint) -> Void)?
+    var onClipClick: ((HistoryEntry) -> Void)?
+    var menuProvider: ((HistoryEntry) -> NSMenu?)?
 
     /// How far the clip sticks up above the photo, onto the rope.
     static let clipOverhang: CGFloat = 8
-    /// Pull the mouse down this far and the clip lets go.
-    private static let pullOffDistance: CGFloat = 70
 
     let entry: HistoryEntry
     /// Only the empty clip is left on the line.
     private(set) var isEmpty = false
+    /// Hangs from a wooden clip that won't let go.
+    private(set) var isFavorite: Bool
 
     private let hanger = CALayer()
-    private let clip = CALayer()
+    private let clip = ClipLayer()
     private let thumbnail: CGImage?
     private let restPosition: CGPoint
     private let tilt: CGFloat
@@ -199,12 +270,20 @@ private final class PhotoView: NSView {
 
     private enum Drag {
         case none
-        /// Pressed; `moved` once it has gone further than a click.
+        /// Pressed on the photo; `moved` once it has gone further than a click.
         case pressed(start: CGPoint, moved: Bool)
-        case carried
+        /// Pressed on the clip.
+        case clip
     }
 
     private var drag = Drag.none
+    private var isOverClip = false
+    private var photoTip = ""
+
+    /// Where a click opens the clip: a little larger than the clip, for an easy target.
+    private var clipTarget: CGRect {
+        CGRect(x: restPosition.x - 14, y: restPosition.y - 14, width: 28, height: Self.clipOverhang + 24)
+    }
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -213,12 +292,13 @@ private final class PhotoView: NSView {
         return formatter
     }()
 
-    init(entry: HistoryEntry, size: CGSize, thumbnail: NSImage?, tilt: CGFloat, period: Double) {
+    init(entry: HistoryEntry, size: CGSize, thumbnail: CGImage?, isFavorite: Bool, tilt: CGFloat, period: Double) {
         self.entry = entry
+        self.isFavorite = isFavorite
         self.tilt = tilt
         self.period = period
-        self.thumbnail = thumbnail?.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        let frame = CGRect(x: 0, y: 0, width: size.width + 16, height: size.height + Self.clipOverhang + 10)
+        self.thumbnail = thumbnail
+        let frame = CGRect(x: 0, y: 0, width: size.width + ClotheslineView.photoPadding, height: size.height + Self.clipOverhang + 10)
         restPosition = CGPoint(x: frame.midX, y: frame.maxY - Self.clipOverhang)
         super.init(frame: frame)
         wantsLayer = true
@@ -230,9 +310,10 @@ private final class PhotoView: NSView {
         hanger.position = restPosition
         hanger.transform = CATransform3DMakeRotation(tilt, 0, 0, 1)
 
-        clip.frame = CGRect(x: size.width / 2 - 5, y: size.height - 7, width: 10, height: 15)
-        clip.backgroundColor = NSColor(srgbRed: 0.94, green: 0.62, blue: 0.15, alpha: 1).cgColor
-        clip.cornerRadius = 2
+        // Hangs from its top, which sits on the rope.
+        clip.anchorPoint = CGPoint(x: 0.5, y: 1)
+        clip.position = CGPoint(x: size.width / 2, y: size.height + Self.clipOverhang)
+        clip.isWooden = isFavorite
         hanger.addSublayer(clip)
 
         layer?.addSublayer(hanger)
@@ -240,7 +321,30 @@ private final class PhotoView: NSView {
 
         var tip = Self.dateFormatter.string(from: entry.createdAt)
         if let app = entry.sourceAppName { tip += " · \(app)" }
-        toolTip = "\(tip)\n点一下浮动到屏幕上，按空格预览\n往下扯或按 Delete 扔进洗衣篮"
+        photoTip = "\(tip)\n点一下浮动到屏幕上，按空格预览\n点夹子或按 Delete 扔进洗衣篮，按 F 收藏"
+        toolTip = photoTip
+    }
+
+    func setFavorite(_ favorite: Bool, animated: Bool) {
+        guard favorite != isFavorite else { return }
+        isFavorite = favorite
+        clip.isWooden = favorite
+        guard animated else { return }
+        // The new clip pops on, and the photo gives a little nod.
+        clip.add(Motion.spring("transform.scale", from: 1.5, to: 1, duration: 0.4, bounce: 0.5), forKey: "pop")
+        let nod = Motion.spring("transform.rotation.z", from: favorite ? 0.12 : -0.08, to: 0, duration: 0.6, bounce: 0.5)
+        nod.isAdditive = true
+        hanger.add(nod, forKey: "nod")
+    }
+
+    /// A quick side-to-side "no", like a password field that didn't take.
+    func shake() {
+        let shake = CAKeyframeAnimation(keyPath: "position.x")
+        shake.values = [0, -8, 7, -5, 3, -1, 0]
+        shake.keyTimes = [0, 0.15, 0.32, 0.5, 0.68, 0.85, 1]
+        shake.duration = 0.45
+        shake.isAdditive = true
+        hanger.add(shake, forKey: "shake")
     }
 
     @available(*, unavailable)
@@ -267,7 +371,9 @@ private final class PhotoView: NSView {
 
     private func sway(fast: Bool) {
         guard !isEmpty else { return }
-        let swing: CGFloat = fast ? 0.07 : 0.025
+        // Big photos swing through a smaller angle, so their bottom edge moves about as far.
+        let damping = min(1, 100 / max(hanger.bounds.height, 1))
+        let swing: CGFloat = (fast ? 0.07 : 0.025) * damping
         let animation = CABasicAnimation(keyPath: "transform.rotation.z")
         animation.fromValue = tilt - swing
         animation.toValue = tilt + swing
@@ -307,13 +413,14 @@ private final class PhotoView: NSView {
         loose.transform = CATransform3DMakeRotation(tilt, 0, 0, 1)
 
         isEmpty = true
+        isOverClip = false
         toolTip = nil
+        window?.invalidateCursorRects(for: self)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         // The clip stays where it was on the rope, hanging from its top.
         let clipTop = CGPoint(x: restPosition.x, y: restPosition.y + Self.clipOverhang)
         clip.removeFromSuperlayer()
-        clip.anchorPoint = CGPoint(x: 0.5, y: 1)
         clip.position = clipTop
         layer?.addSublayer(clip)
         hanger.removeAllAnimations()
@@ -330,7 +437,26 @@ private final class PhotoView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func resetCursorRects() {
+        if !isEmpty { addCursorRect(clipTarget, cursor: .pointingHand) }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        setOverClip(!isEmpty && clipTarget.contains(convert(event.locationInWindow, from: nil)))
+    }
+
+    /// Under the mouse, the clip opens a little, inviting a click.
+    private func setOverClip(_ over: Bool) {
+        guard over != isOverClip else { return }
+        isOverClip = over
+        let current = clip.presentation()?.value(forKeyPath: "transform.rotation.z") as? CGFloat ?? 0
+        let target: CGFloat = over ? (isFavorite ? -0.06 : -0.22) : 0
+        Motion.immediately { clip.setValue(target, forKeyPath: "transform.rotation.z") }
+        clip.add(Motion.spring("transform.rotation.z", from: current, to: target, duration: 0.3, bounce: 0.4), forKey: "ajar")
+        toolTip = over ? (isFavorite ? "已收藏，木夹子打不开" : "点夹子松开，扔进洗衣篮") : photoTip
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -340,6 +466,7 @@ private final class PhotoView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
+        setOverClip(false)
         guard !isEmpty else { return }
         sway(fast: false)
         onHover?(entry, false)
@@ -347,32 +474,30 @@ private final class PhotoView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard !isEmpty else { return }
-        drag = .pressed(start: event.locationInWindow, moved: false)
+        if clipTarget.contains(convert(event.locationInWindow, from: nil)) {
+            drag = .clip
+            // Pinched.
+            clip.add(Motion.spring("transform.scale", from: 0.85, to: 1, duration: 0.3, bounce: 0.3), forKey: "pinch")
+        } else {
+            drag = .pressed(start: event.locationInWindow, moved: false)
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        isEmpty ? nil : menuProvider?(entry)
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard case .pressed(let start, let moved) = drag else { return }
         let point = event.locationInWindow
-        switch drag {
-        case .none:
-            return
-        case .carried:
-            onCarry?(point)
-        case .pressed(let start, let moved):
-            let dx = point.x - start.x, down = max(0, start.y - point.y)
-            guard moved || hypot(dx, start.y - point.y) >= 4 else { return }
-            if down >= Self.pullOffDistance {
-                drag = .carried
-                onHover?(entry, false)
-                let (loose, frame) = pullOff()
-                onPullOff?(entry, loose, frame)
-                onCarry?(point)
-            } else {
-                drag = .pressed(start: start, moved: true)
-                // The clip resists more the further it's pulled, like a rubber band.
-                Motion.immediately {
-                    hanger.position = CGPoint(x: restPosition.x + Self.rubberBand(dx, limit: 14), y: restPosition.y - Self.rubberBand(down, limit: 40))
-                }
-            }
+        let dx = point.x - start.x, dy = point.y - start.y
+        guard moved || hypot(dx, dy) >= 4 else { return }
+        drag = .pressed(start: start, moved: true)
+        // Tugging stretches the photo a little, more and more stiffly; the wooden clip gives less.
+        let give: CGFloat = isFavorite ? 0.5 : 1
+        Motion.immediately {
+            hanger.position = CGPoint(x: restPosition.x + Self.rubberBand(dx, limit: 14 * give),
+                                      y: restPosition.y + Self.rubberBand(min(dy, 0), limit: 40 * give))
         }
     }
 
@@ -381,8 +506,8 @@ private final class PhotoView: NSView {
         switch drag {
         case .none:
             return
-        case .carried:
-            onLetGo?(event.locationInWindow)
+        case .clip:
+            if clipTarget.contains(convert(event.locationInWindow, from: nil)) { onClipClick?(entry) }
         case .pressed(_, let moved):
             if moved { springBack() } else { onPick?(entry) }
         }
@@ -399,5 +524,75 @@ private final class PhotoView: NSView {
     private static func rubberBand(_ offset: CGFloat, limit: CGFloat) -> CGFloat {
         let stretched = limit * (1 - 1 / (abs(offset) * 0.55 / limit + 1))
         return offset < 0 ? -stretched : stretched
+    }
+}
+
+/// The clip holding a photo to the rope: a plain plastic one, or a sturdier wooden one with a
+/// metal spring for favorites. Drawn hanging down from its top edge.
+@MainActor
+private final class ClipLayer: CALayer {
+    var isWooden = false {
+        didSet { redraw() }
+    }
+
+    override init() {
+        super.init()
+        redraw()
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    private func redraw() {
+        sublayers?.forEach { $0.removeFromSuperlayer() }
+        if isWooden {
+            bounds = CGRect(x: 0, y: 0, width: 13, height: 19)
+            let wood = CAGradientLayer()
+            wood.frame = bounds
+            wood.colors = [NSColor(srgbRed: 0.88, green: 0.72, blue: 0.50, alpha: 1).cgColor,
+                           NSColor(srgbRed: 0.70, green: 0.50, blue: 0.29, alpha: 1).cgColor]
+            wood.startPoint = CGPoint(x: 0, y: 0.5)
+            wood.endPoint = CGPoint(x: 1, y: 0.5)
+            wood.cornerRadius = 2.5
+            wood.borderColor = NSColor(srgbRed: 0.45, green: 0.30, blue: 0.16, alpha: 1).cgColor
+            wood.borderWidth = 0.75
+            addSublayer(wood)
+            // The grain, and the seam between the two halves.
+            let grain = CAShapeLayer()
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: 6.5, y: 1))
+            path.addLine(to: CGPoint(x: 6.5, y: 18))
+            path.move(to: CGPoint(x: 3.5, y: 2))
+            path.addQuadCurve(to: CGPoint(x: 3, y: 17), control: CGPoint(x: 4.5, y: 9))
+            path.move(to: CGPoint(x: 9.8, y: 3))
+            path.addQuadCurve(to: CGPoint(x: 10, y: 16), control: CGPoint(x: 9, y: 10))
+            grain.path = path
+            grain.strokeColor = NSColor(srgbRed: 0.45, green: 0.30, blue: 0.16, alpha: 0.55).cgColor
+            grain.lineWidth = 0.6
+            grain.fillColor = nil
+            addSublayer(grain)
+            // The metal spring wrapped around the middle.
+            let spring = CAGradientLayer()
+            spring.frame = CGRect(x: -1.5, y: 8.5, width: 16, height: 4)
+            spring.colors = [NSColor(white: 0.95, alpha: 1).cgColor, NSColor(white: 0.42, alpha: 1).cgColor]
+            spring.cornerRadius = 2
+            spring.borderColor = NSColor(white: 0.3, alpha: 0.8).cgColor
+            spring.borderWidth = 0.5
+            addSublayer(spring)
+        } else {
+            bounds = CGRect(x: 0, y: 0, width: 10, height: 15)
+            let plastic = CAGradientLayer()
+            plastic.frame = bounds
+            plastic.colors = [NSColor(srgbRed: 0.98, green: 0.70, blue: 0.25, alpha: 1).cgColor,
+                              NSColor(srgbRed: 0.90, green: 0.56, blue: 0.10, alpha: 1).cgColor]
+            plastic.startPoint = CGPoint(x: 0, y: 0.5)
+            plastic.endPoint = CGPoint(x: 1, y: 0.5)
+            plastic.cornerRadius = 2
+            addSublayer(plastic)
+        }
     }
 }

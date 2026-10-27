@@ -110,5 +110,20 @@ final class HistoryDatabaseTests: XCTestCase {
         // Opening again doesn't try to add the column twice.
         XCTAssertEqual(try HistoryDatabase(url: databaseURL).count(), 1)
     }
+
+    func testCountsAndTogglesFavorites() throws {
+        let database = try HistoryDatabase(url: databaseURL)
+        let plain = entry(minutesAgo: 3), loved = entry(minutesAgo: 2, favorite: true), thrown = entry(minutesAgo: 1, favorite: true)
+        try [plain, loved, thrown].forEach(database.insert)
+        try database.setTrashed(Date(timeIntervalSince1970: 1_800_000_100), ids: [thrown.id])
+        // The basket doesn't count.
+        XCTAssertEqual(try database.favoriteCount(), 1)
+
+        try database.setFavorite(true, id: plain.id)
+        try database.setFavorite(false, id: loved.id)
+        XCTAssertEqual(try database.entry(id: plain.id)?.isFavorite, true)
+        XCTAssertEqual(try database.entry(id: loved.id)?.isFavorite, false)
+        XCTAssertEqual(try database.favoriteCount(), 1)
+    }
 }
 #endif

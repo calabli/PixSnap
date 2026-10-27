@@ -40,7 +40,8 @@ final class CaptureCoordinator {
         for capture: Capture,
         history: EditHistory<AnnotationDocument>? = nil,
         on screen: NSScreen,
-        returnFrame: CGRect? = nil
+        returnFrame: CGRect? = nil,
+        historyID: UUID? = nil
     ) {
         let editor = EditorWindowController(capture: capture, history: history, screen: screen)
         editor.onClose = { [weak self] closed in self?.editors.removeAll { $0 === closed } }
@@ -50,7 +51,7 @@ final class CaptureCoordinator {
             let visible = screen.visibleFrame
             let frame = returnFrame.map { CGRect(x: $0.minX, y: $0.maxY - size.height, width: size.width, height: size.height) }
                 ?? CGRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2, width: size.width, height: size.height)
-            self?.pin(capture, history: history, at: frame, on: screen)
+            self?.pin(capture, history: history, at: frame, on: screen, historyID: historyID)
         }
         editors.append(editor)
         editor.show()
@@ -74,7 +75,7 @@ final class CaptureCoordinator {
         guard let capture = HistoryLibrary.shared.loadCapture(entry),
               let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main
         else { return }
-        pin(capture, at: ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame), on: screen)
+        pin(capture, at: ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame), on: screen, historyID: entry.id)
     }
 
     /// Floats an image file in the middle of the screen under the cursor, optionally pinned (no bar).
@@ -211,7 +212,7 @@ final class CaptureCoordinator {
         let scale = frozen.screen.backingScaleFactor
         let capture = Capture(image: cropped, scale: scale)
         if AppSettings.shared.copiesAfterCapture { ImageExporter.copyToPasteboard(capture) }
-        HistoryLibrary.shared.add(capture, sourceApp: sourceApp)
+        let entry = HistoryLibrary.shared.add(capture, sourceApp: sourceApp)
         // Pin it exactly where it was taken (pixel rect has a top-left origin; the screen a bottom-left one).
         let screenFrame = frozen.screen.frame
         let imageFrame = CGRect(
@@ -220,21 +221,22 @@ final class CaptureCoordinator {
             width: capture.pointSize.width,
             height: capture.pointSize.height
         )
-        pin(capture, at: imageFrame, on: frozen.screen)
+        pin(capture, at: imageFrame, on: frozen.screen, historyID: entry?.id)
     }
 
     private func pin(
         _ capture: Capture,
         history: EditHistory<AnnotationDocument>? = nil,
         at imageFrame: CGRect,
-        on screen: NSScreen
+        on screen: NSScreen,
+        historyID: UUID? = nil
     ) {
-        let floating = FloatingCaptureWindow(capture: capture, history: history, imageFrame: imageFrame, screen: screen)
+        let floating = FloatingCaptureWindow(capture: capture, history: history, imageFrame: imageFrame, screen: screen, historyID: historyID)
         floating.onEdit = { [weak self] window in
             let frame = window.imageFrame
             let history = window.history
             window.close()
-            self?.openEditor(for: window.capture, history: history, on: screen, returnFrame: frame)
+            self?.openEditor(for: window.capture, history: history, on: screen, returnFrame: frame, historyID: window.historyID)
         }
         floating.onClosed = { [weak self] window in self?.floatingCaptures.removeAll { $0 === window } }
         floatingCaptures.append(floating)

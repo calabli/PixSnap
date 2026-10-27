@@ -2,7 +2,8 @@ import AppKit
 import PixSnapCore
 
 /// A finished capture floating on screen where it was taken. The bar underneath has quick annotation
-/// tools that draw right on the image, plus pin, edit mode, copy, save and close. With no tool
+/// tools that draw right on the image, plus favorite (when it's in history), pin, edit mode, copy,
+/// save and close. With no tool
 /// selected, dragging the image moves it; double-click opens edit mode; Esc drops the tool, then closes.
 ///
 /// Pinned (图钉): the bar goes away and only the image stays on top of everything, still draggable.
@@ -13,6 +14,8 @@ final class FloatingCaptureWindow: NSPanel {
     var onClosed: ((FloatingCaptureWindow) -> Void)?
 
     let capture: Capture
+    /// Its entry in history, if it has one; favorites need it.
+    let historyID: UUID?
     private let canvas: CanvasView
     private let bar = ActionBar()
     private let feedback = FeedbackBadge()
@@ -29,8 +32,10 @@ final class FloatingCaptureWindow: NSPanel {
     private static let gap: CGFloat = 6
 
     /// `imageFrame` is where the (cropped) result should appear, in global AppKit coordinates.
-    init(capture: Capture, history: EditHistory<AnnotationDocument>?, imageFrame: CGRect, screen: NSScreen) {
+    init(capture: Capture, history: EditHistory<AnnotationDocument>?, imageFrame: CGRect, screen: NSScreen, historyID: UUID? = nil) {
         self.capture = capture
+        self.historyID = historyID
+        bar.showsFavorite = historyID != nil
         canvas = CanvasView(capture: capture, history: history)
         let layout = Self.layout(imageFrame: imageFrame, barSize: bar.fittingSize, visible: screen.visibleFrame)
         imageRect = layout.image
@@ -65,6 +70,7 @@ final class FloatingCaptureWindow: NSPanel {
         bar.onTool = { [weak self] tool in self?.setTool(tool) }
         bar.onUndo = { [weak self] in self?.canvas.undo() }
         bar.onPin = { [weak self] in self?.setPinned(true) }
+        bar.onFavorite = { [weak self] in self?.toggleFavorite() }
         bar.onEdit = { [weak self] in self?.edit() }
         bar.onCopy = { [weak self] in self?.copyImage() }
         bar.onSave = { [weak self] in self?.saveImage() }
@@ -81,6 +87,8 @@ final class FloatingCaptureWindow: NSPanel {
         content.onHoverChanged = { [weak self] hovering in
             guard let self else { return }
             unpinButton.isHidden = !(isPinned && hovering)
+            // It may have been changed on the clothesline meanwhile.
+            if hovering { refreshFavorite() }
         }
         content.addSubview(canvas)
         content.addSubview(bar)
@@ -89,7 +97,26 @@ final class FloatingCaptureWindow: NSPanel {
         content.addSubview(unpinButton)
         contentView = content
         refreshUndo()
+        refreshFavorite()
     }
+
+    private var isFavorite: Bool {
+        historyID.map { HistoryLibrary.shared.isFavorite($0) } ?? false
+    }
+
+    private func refreshFavorite() {
+        bar.setFavorite(isFavorite)
+    }
+
+    private func toggleFavorite() {
+        guard let historyID else { return }
+        let favorite = !isFavorite
+        HistoryLibrary.shared.setFavorite(favorite, id: historyID)
+        bar.setFavorite(favorite)
+        feedback.show(favorite ? "已收藏，不会被自动清理" : "已取消收藏")
+    }
+
+    @objc private func favoriteFromMenu() { toggleFavorite() }
 
     /// Pinning drops the bar and shrinks the window to the image; unpinning lays the bar out again.
     /// The image stays exactly where it is on screen either way.
@@ -127,12 +154,13 @@ final class FloatingCaptureWindow: NSPanel {
     /// Right-click menu while pinned, since the bar is hidden.
     private func pinnedMenu() -> NSMenu {
         let menu = NSMenu()
-        let items: [(String, Selector)] = [
+        var items: [(String, Selector)] = [
             ("取消钉住", #selector(unpin)),
             ("编辑模式", #selector(editFromMenu)),
             ("复制", #selector(copyFromMenu)),
             ("保存", #selector(saveFromMenu)),
         ]
+        if historyID != nil { items.insert((isFavorite ? "取消收藏" : "收藏", #selector(favoriteFromMenu)), at: 1) }
         for (title, action) in items {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
@@ -238,6 +266,7 @@ private final class ActionBar: NSVisualEffectView {
     var onTool: ((EditorTool) -> Void)?
     var onUndo: (() -> Void)?
     var onPin: (() -> Void)?
+    var onFavorite: (() -> Void)?
     var onEdit: (() -> Void)?
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
@@ -245,6 +274,12 @@ private final class ActionBar: NSVisualEffectView {
 
     private let toolControl: NSSegmentedControl
     private var undoButton: NSButton!
+    private var favoriteButton: NSButton!
+
+    /// Only captures kept in history can be favorites.
+    var showsFavorite = true {
+        didSet { favoriteButton.isHidden = !showsFavorite }
+    }
 
     init() {
         toolControl = NSSegmentedControl(
@@ -267,10 +302,12 @@ private final class ActionBar: NSVisualEffectView {
         }
 
         undoButton = button(nil, symbol: "arrow.uturn.backward", tip: "撤销", action: #selector(undo))
+        favoriteButton = button(nil, symbol: "star", tip: "收藏：不会被自动清理，晾衣架上换成木夹子", action: #selector(favorite))
         let views: [NSView] = [
             toolControl,
             undoButton,
             divider(),
+            favoriteButton,
             button("钉住", symbol: "pin", tip: "钉在屏幕上：隐藏操作栏，只留图片，可拖动", action: #selector(pin)),
             button("编辑模式", symbol: "slider.horizontal.3", tip: "更多编辑：颜色、粗细、裁剪等（双击图片）", action: #selector(edit)),
             button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
@@ -306,6 +343,12 @@ private final class ActionBar: NSVisualEffectView {
         undoButton.isEnabled = enabled
     }
 
+    func setFavorite(_ favorite: Bool) {
+        favoriteButton.image = NSImage(systemSymbolName: favorite ? "star.fill" : "star", accessibilityDescription: favorite ? "取消收藏" : "收藏")
+        favoriteButton.contentTintColor = favorite ? .systemYellow : nil
+        favoriteButton.toolTip = favorite ? "取消收藏" : "收藏：不会被自动清理，晾衣架上换成木夹子"
+    }
+
     private func button(_ title: String?, symbol: String, tip: String, action: Selector) -> NSButton {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title ?? tip)!
         let button = title.map { NSButton(title: $0, image: image, target: self, action: action) }
@@ -338,6 +381,7 @@ private final class ActionBar: NSVisualEffectView {
 
     @objc private func undo() { onUndo?() }
     @objc private func pin() { onPin?() }
+    @objc private func favorite() { onFavorite?() }
     @objc private func edit() { onEdit?() }
     @objc private func copyImage() { onCopy?() }
     @objc private func save() { onSave?() }

@@ -21,6 +21,9 @@ final class HistoryLibrary {
     @ObservationIgnored private let thumbnails: URL
     @ObservationIgnored private let database: HistoryDatabase?
     @ObservationIgnored private let settings = AppSettings.shared
+    /// Favorites set while a new capture was still being written, applied once it's recorded.
+    @ObservationIgnored private var pendingFavorites: [UUID: Bool] = [:]
+    @ObservationIgnored private var pendingIDs: Set<UUID> = []
 
     private init() {
         folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -39,10 +42,12 @@ final class HistoryLibrary {
 
     // MARK: Adding
 
-    /// Saves `capture` when history is on. Encoding a full Retina screen takes a few hundred
-    /// milliseconds, so it happens in the background.
-    func add(_ capture: Capture, sourceApp: NSRunningApplication?) {
-        guard settings.savesHistory, let database else { return }
+    /// Saves `capture` when history is on, and returns its entry right away so the capture on screen
+    /// can refer to it. Encoding a full Retina screen takes a few hundred milliseconds, so it
+    /// happens in the background.
+    @discardableResult
+    func add(_ capture: Capture, sourceApp: NSRunningApplication?) -> HistoryEntry? {
+        guard settings.savesHistory, let database else { return nil }
         let entry = HistoryEntry(
             createdAt: capture.date,
             pixelWidth: capture.image.width,
@@ -53,13 +58,17 @@ final class HistoryLibrary {
         )
         let image = SendableImage(image: capture.image)
         let originals = originals, thumbnails = thumbnails
+        pendingIDs.insert(entry.id)
         Task {
+            defer { pendingIDs.remove(entry.id) }
             let written = await Task.detached(priority: .utility) {
                 HistoryFiles.write(image.image, id: entry.id, originals: originals, thumbnails: thumbnails)
             }.value
             guard written else { return }
             do {
-                try database.insert(entry)
+                var recorded = entry
+                if let favorite = pendingFavorites.removeValue(forKey: entry.id) { recorded.isFavorite = favorite }
+                try database.insert(recorded)
             } catch {
                 NSLog("PixSnap could not record a capture in history: \(error)")
                 HistoryFiles.remove(id: entry.id, originals: originals, thumbnails: thumbnails)
@@ -68,6 +77,7 @@ final class HistoryLibrary {
             cleanUp()
             revision += 1
         }
+        return entry
     }
 
     // MARK: Reading
@@ -88,6 +98,21 @@ final class HistoryLibrary {
         NSImage(contentsOf: thumbnails.appendingPathComponent("\(entry.id.uuidString).jpg"))
     }
 
+    /// An image sharp enough to show at `pixelSize` (its longest side): the stored thumbnail when
+    /// that's enough, otherwise scaled down from the original.
+    func image(for entry: HistoryEntry, pixelSize: CGFloat) -> CGImage? {
+        if pixelSize <= CGFloat(HistoryFiles.thumbnailPixelSize) || HistoryFiles.originalURL(id: entry.id, in: originals) == nil {
+            return thumbnail(for: entry)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        }
+        guard let url = HistoryFiles.originalURL(id: entry.id, in: originals),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(pixelSize.rounded(.up)),
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ] as CFDictionary)
+    }
+
     func loadCapture(_ entry: HistoryEntry) -> Capture? {
         guard let url = HistoryFiles.originalURL(id: entry.id, in: originals),
               let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -101,6 +126,29 @@ final class HistoryLibrary {
         return files.compactMap { ($0 as? URL).flatMap { try? $0.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize } }
             .reduce(Int64(0)) { $0 + Int64($1) }
     }
+
+    // MARK: Favorites
+
+    /// Favorites are never cleaned up automatically and can't be thrown into the basket.
+    func isFavorite(_ id: UUID) -> Bool {
+        pendingFavorites[id] ?? (try? database?.entry(id: id))??.isFavorite ?? false
+    }
+
+    func setFavorite(_ isFavorite: Bool, id: UUID) {
+        if pendingIDs.contains(id) {
+            pendingFavorites[id] = isFavorite
+            return
+        }
+        do {
+            try database?.setFavorite(isFavorite, id: id)
+        } catch {
+            NSLog("PixSnap could not update a favorite: \(error)")
+            return
+        }
+        revision += 1
+    }
+
+    var favoriteCount: Int { (try? database?.favoriteCount()) ?? 0 }
 
     // MARK: The laundry basket
 

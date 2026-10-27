@@ -25,18 +25,6 @@ final class BasketView: NSView {
         didSet { updateContents() }
     }
 
-    /// Grows a little when a carried photo is over it, like it's ready to catch.
-    var isReady = false {
-        didSet {
-            guard isReady != oldValue, let layer else { return }
-            let current = layer.presentation()?.transform ?? layer.transform
-            let target = isReady ? CATransform3DMakeAffineTransform(Self.scaledAroundCenter(1.12, in: bounds)) : CATransform3DIdentity
-            Motion.immediately { layer.transform = target }
-            layer.add(Motion.spring("transform", from: NSValue(caTransform3D: current), to: NSValue(caTransform3D: target),
-                                    duration: 0.3, bounce: 0.35), forKey: "ready")
-        }
-    }
-
     override init(frame: CGRect) {
         super.init(frame: CGRect(origin: frame.origin, size: Self.size))
         wantsLayer = true
@@ -234,10 +222,6 @@ final class BasketView: NSView {
         var transform = CATransform3DMakeTranslation(bounds.midX, 0, 0)
         transform = CATransform3DScale(transform, x, y, 1)
         return CATransform3DTranslate(transform, -bounds.midX, 0, 0)
-    }
-
-    private static func scaledAroundCenter(_ scale: CGFloat, in bounds: CGRect) -> CGAffineTransform {
-        CGAffineTransform(translationX: bounds.midX, y: 0).scaledBy(x: scale, y: scale).translatedBy(x: -bounds.midX, y: 0)
     }
 }
 

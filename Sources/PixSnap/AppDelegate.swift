@@ -135,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         for entry in entries {
-            var title = Self.recentDateFormatter.string(from: entry.createdAt)
+            var title = (entry.isFavorite ? "★ " : "") + Self.recentDateFormatter.string(from: entry.createdAt)
             if let app = entry.sourceAppName { title += " · \(app)" }
             let item = NSMenuItem(title: title, action: #selector(pinRecent(_:)), keyEquivalent: "")
             item.target = self

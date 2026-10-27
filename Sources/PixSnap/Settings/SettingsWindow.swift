@@ -60,12 +60,16 @@ struct SettingsView: View {
     /// Shows or hides the notch handles after the toggle changes.
     var onNotchSettingChange: () -> Void = {}
 
-    /// "85 张 · 42.3 MB", or "85 张 · 洗衣篮 3 张 · 42.3 MB"
+    /// "85 张 · 42.3 MB", or "85 张 · 收藏 4 张 · 洗衣篮 3 张 · 42.3 MB"
     private var historyUsage: String {
         _ = history.revision
         let size = ByteCountFormatter.string(fromByteCount: history.diskUsage(), countStyle: .file)
+        var parts = ["\(history.count) 张"]
+        let favorites = history.favoriteCount
+        if favorites > 0 { parts.append("收藏 \(favorites) 张") }
         let basket = history.basket().count
-        return basket == 0 ? "\(history.count) 张 · \(size)" : "\(history.count) 张 · 洗衣篮 \(basket) 张 · \(size)"
+        if basket > 0 { parts.append("洗衣篮 \(basket) 张") }
+        return (parts + [size]).joined(separator: " · ")
     }
 
     var body: some View {
