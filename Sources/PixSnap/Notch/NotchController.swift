@@ -40,12 +40,14 @@ final class NotchController {
     }
 
     /// Opens the clothesline on the screen under the cursor, without a gesture.
-    func openOnScreenUnderMouse(previewingNewest: Bool = false) {
+    func openOnScreenUnderMouse(previewingNewest: Bool = false, openingBasket: Bool = false, throwingNewest: Bool = false) {
         let mouse = NSEvent.mouseLocation
         let screenWindow = windows.first { ScreenGeometry.screen($0.screenFrame, containsMouse: mouse) } ?? windows.first
         if let screenWindow {
             screenWindow.openNow()
             if previewingNewest { screenWindow.previewNewest() }
+            if openingBasket { screenWindow.openBasket() }
+            if throwingNewest { screenWindow.throwNewest() }
         } else {
             // The handles are turned off: open a temporary one on this screen.
             guard let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }

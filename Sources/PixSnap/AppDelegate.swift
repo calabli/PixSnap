@@ -39,8 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]), pinned: arguments.contains("--pinned"))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
-        // `--clothesline` opens the clothesline; add `--preview` to also preview the newest photo.
-        if arguments.contains("--clothesline") { notch.openOnScreenUnderMouse(previewingNewest: arguments.contains("--preview")) }
+        // `--clothesline` opens the clothesline; add `--preview` to also preview the newest photo,
+        // `--basket` to open the laundry basket, or `--throw` to throw the newest photo into it.
+        if arguments.contains("--clothesline") {
+            notch.openOnScreenUnderMouse(previewingNewest: arguments.contains("--preview"), openingBasket: arguments.contains("--basket"),
+                                         throwingNewest: arguments.contains("--throw"))
+        }
         if let flag = arguments.firstIndex(of: "--history-add"), arguments.indices.contains(flag + 1) {
             coordinator.addToHistory(imageAt: URL(fileURLWithPath: arguments[flag + 1]))
         }

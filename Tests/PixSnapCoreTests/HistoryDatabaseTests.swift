@@ -1,4 +1,5 @@
 #if canImport(SQLite3)
+import SQLite3
 import XCTest
 @testable import PixSnapCore
 
@@ -69,6 +70,45 @@ final class HistoryDatabaseTests: XCTestCase {
         try database.insert(saved)
         XCTAssertThrowsError(try database.insert(saved))
         XCTAssertEqual(try database.count(), 1)
+    }
+
+    func testBasketHidesEntriesUntilRestored() throws {
+        let database = try HistoryDatabase(url: databaseURL)
+        let kept = entry(minutesAgo: 20), thrown = entry(minutesAgo: 10), later = entry(minutesAgo: 1)
+        try [kept, thrown, later].forEach(database.insert)
+        let throwTime = Date(timeIntervalSince1970: 1_800_000_100)
+        try database.setTrashed(throwTime, ids: [thrown.id])
+        try database.setTrashed(throwTime.addingTimeInterval(60), ids: [later.id])
+
+        XCTAssertEqual(try database.recent(limit: 10).map(\.id), [kept.id])
+        XCTAssertEqual(try database.count(), 1)
+        // Most recently thrown first, with the time it went in.
+        XCTAssertEqual(try database.basket().map(\.id), [later.id, thrown.id])
+        XCTAssertEqual(try database.entry(id: thrown.id)?.trashedAt, throwTime)
+        XCTAssertEqual(try database.ids(trashedBefore: throwTime.addingTimeInterval(30)), [thrown.id])
+
+        try database.setTrashed(nil, ids: [thrown.id])
+        XCTAssertEqual(try database.recent(limit: 10).map(\.id), [thrown.id, kept.id])
+        XCTAssertNil(try database.entry(id: thrown.id)?.trashedAt)
+    }
+
+    func testAddsTheBasketToAFirstVersionDatabase() throws {
+        // The schema as first shipped, before the basket column.
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &handle), SQLITE_OK)
+        sqlite3_exec(handle, """
+            CREATE TABLE captures (id TEXT PRIMARY KEY, created_at REAL NOT NULL, pixel_width INTEGER NOT NULL,
+                pixel_height INTEGER NOT NULL, scale REAL NOT NULL, source_app_name TEXT, source_bundle_id TEXT,
+                is_favorite INTEGER NOT NULL DEFAULT 0, ocr_text TEXT);
+            INSERT INTO captures VALUES ('\(UUID().uuidString)', 1800000000, 100, 50, 2, NULL, NULL, 0, NULL);
+            """, nil, nil, nil)
+        sqlite3_close(handle)
+
+        let database = try HistoryDatabase(url: databaseURL)
+        XCTAssertEqual(try database.count(), 1)
+        XCTAssertNil(try database.recent(limit: 1).first?.trashedAt)
+        // Opening again doesn't try to add the column twice.
+        XCTAssertEqual(try HistoryDatabase(url: databaseURL).count(), 1)
     }
 }
 #endif

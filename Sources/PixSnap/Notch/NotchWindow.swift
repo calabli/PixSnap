@@ -8,6 +8,12 @@ import PixSnapCore
 /// across the whole screen and the captures hanging from them. Esc, a click elsewhere (it passes
 /// through to what's underneath) or a click on the handle puts them away. Space previews the photo
 /// under the mouse in a large view; ← → step through the photos, Return floats the one shown.
+///
+/// Deleting works like a real line: pull a photo down until the clip lets go, carry it, and let go —
+/// it falls into the laundry basket at the bottom of the screen (Delete does the same for the photo
+/// under the mouse or in the preview). The basket keeps captures for a while; click it to hang them
+/// back, or empty it. ⌘Z hangs the last one thrown back up. While the lines are out the window
+/// covers the whole screen, transparent except for what's drawn, so photos can fall all the way.
 @MainActor
 final class NotchWindow: NSPanel {
     var onPick: ((HistoryEntry) -> Void)?
@@ -17,7 +23,7 @@ final class NotchWindow: NSPanel {
     let screenFrame: CGRect
     private let collapsedFrame: CGRect
     private let hoverFrame: CGRect
-    /// The window while the lines are out: the full screen width, from the top down.
+    /// The window while the lines are out: the whole screen.
     private var openFrame: CGRect
     /// How far down the lines start: below the notch, or below the menu bar on other screens.
     private let topInset: CGFloat
@@ -25,6 +31,15 @@ final class NotchWindow: NSPanel {
     private let content = PassthroughContentView()
     private let handle = HandleView()
     private let clothesline: ClotheslineView
+    private let basket = BasketView(frame: .zero)
+    private var basketPanel: BasketPanel?
+
+    /// A photo pulled off the line and following the mouse.
+    private var carried: Carried?
+    /// Photos falling toward the basket right now; it stays out until they land.
+    private var falling = 0
+    /// Thrown while the lines were out, newest last, for ⌘Z.
+    private var thrown: [HistoryEntry] = []
 
     private enum Phase {
         case collapsed, hovering
@@ -75,7 +90,14 @@ final class NotchWindow: NSPanel {
 
         clothesline.isHidden = true
         clothesline.onPick = { [weak self] entry in self?.pick(entry) }
+        clothesline.onPullOff = { [weak self] entry, loose, frame in self?.beginCarrying(entry, loose, from: frame) }
+        clothesline.onCarry = { [weak self] point in self?.carry(to: point) }
+        clothesline.onLetGo = { [weak self] point in self?.letGo(at: point) }
+        basket.isHidden = true
+        basket.onClick = { [weak self] in self?.toggleBasketPanel() }
+        content.wantsLayer = true
         content.addSubview(clothesline)
+        content.addSubview(basket)
         content.addSubview(handle)
         contentView = content
     }
@@ -83,7 +105,9 @@ final class NotchWindow: NSPanel {
     override var canBecomeKey: Bool { true }
 
     override func cancelOperation(_ sender: Any?) {
-        if preview.entry != nil {
+        if basketPanel != nil {
+            closeBasketPanel()
+        } else if preview.entry != nil {
             preview.dismiss()
         } else {
             collapse()
@@ -92,7 +116,13 @@ final class NotchWindow: NSPanel {
 
     override func keyDown(with event: NSEvent) {
         guard case .open = phase else { return super.keyDown(with: event) }
+        if event.modifierFlags.contains(.command) {
+            if event.charactersIgnoringModifiers == "z" { hangBackLastThrown() } else { super.keyDown(with: event) }
+            return
+        }
         switch event.keyCode {
+        case 51, 117: // Delete, Forward Delete
+            throwAwayFromKeyboard()
         case 49: // space
             if preview.entry != nil {
                 preview.dismiss()
@@ -108,10 +138,12 @@ final class NotchWindow: NSPanel {
         }
     }
 
-    /// Previews the newest photo without a key press (`--clothesline --preview`).
+    /// Previews the newest photo without a key press (`--clothesline --preview`), after the lines settle.
     func previewNewest() {
-        guard case .open = phase, let entry = clothesline.entries.last else { return }
-        preview.show(entry, from: clothesline.screenRect(of: entry))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self, case .open = self.phase, let entry = self.clothesline.entries.last else { return }
+            self.preview.show(entry, from: self.clothesline.screenRect(of: entry))
+        }
     }
 
     /// Shows the previous or next photo on the lines, in reading order.
@@ -120,7 +152,7 @@ final class NotchWindow: NSPanel {
         guard let current = preview.entry, let index = entries.firstIndex(of: current) else { return }
         let next = min(max(index + offset, 0), entries.count - 1)
         guard next != index else { return }
-        preview.show(entries[next], from: clothesline.screenRect(of: entries[next]))
+        preview.show(entries[next], from: clothesline.screenRect(of: entries[next]), direction: offset)
     }
 
     private func pick(_ entry: HistoryEntry) {
@@ -193,8 +225,7 @@ final class NotchWindow: NSPanel {
     private func prepareLines() {
         let loaded = loadDays?() ?? (days: [], emptyMessage: "")
         let height = ClotheslineView.height(forDays: loaded.days.count)
-        openFrame = CGRect(x: screenFrame.minX, y: screenFrame.maxY - topInset - height,
-                           width: screenFrame.width, height: topInset + height)
+        openFrame = screenFrame
         let handleOnScreen = frame
         setFrame(openFrame, display: false)
         handle.autoresizingMask = []
@@ -202,6 +233,18 @@ final class NotchWindow: NSPanel {
 
         clothesline.frame = CGRect(x: 0, y: 0, width: openFrame.width, height: height)
         clothesline.show(loaded.days, style: AppSettings.shared.ropeStyle, thumbnails: { HistoryLibrary.shared.thumbnail(for: $0) }, emptyMessage: loaded.emptyMessage)
+        thrown = []
+        basket.entries = HistoryLibrary.shared.basket()
+    }
+
+    /// Rebuilds the lines in place after captures come back from the basket; `dropping` falls in
+    /// with a bounce, or all of them when nil.
+    private func reloadLines(dropping entry: HistoryEntry?) {
+        let loaded = loadDays?() ?? (days: [], emptyMessage: "")
+        let height = ClotheslineView.height(forDays: loaded.days.count)
+        clothesline.frame = CGRect(x: 0, y: content.bounds.height - topInset - height, width: content.bounds.width, height: height)
+        clothesline.show(loaded.days, style: AppSettings.shared.ropeStyle, thumbnails: { HistoryLibrary.shared.thumbnail(for: $0) }, emptyMessage: loaded.emptyMessage)
+        clothesline.playDropAnimation(only: entry)
     }
 
     /// 0: the lines are tucked above the top of the screen; 1: hanging in place under the notch.
@@ -225,6 +268,7 @@ final class NotchWindow: NSPanel {
         clothesline.playDropAnimation()
         makeKey()
         startWatchingOutsideClicks()
+        updateBasket()
     }
 
     func collapse() {
@@ -240,6 +284,11 @@ final class NotchWindow: NSPanel {
         }
         phase = .closing
         preview.dismiss(animated: false)
+        // A photo still in hand goes back on the line next time; it was never thrown.
+        carried?.layer.removeFromSuperlayer()
+        carried = nil
+        closeBasketPanel()
+        setBasketShown(false)
         stopWatchingOutsideClicks()
         handle.showsHint = false
         NSAnimationContext.runAnimationGroup({ context in
@@ -260,6 +309,231 @@ final class NotchWindow: NSPanel {
         setFrame(collapsedFrame, display: true)
         handle.frame = content.bounds
         handle.autoresizingMask = [.width, .height]
+    }
+
+    // MARK: The laundry basket
+
+    /// Out while there's something in it, a photo in hand, or one on its way down.
+    private func updateBasket() {
+        basket.entries = HistoryLibrary.shared.basket()
+        guard case .open = phase else { return }
+        setBasketShown(!basket.entries.isEmpty || carried != nil || falling > 0)
+    }
+
+    /// Bottom center of the screen, just above the Dock.
+    private var basketRestFrame: CGRect {
+        let visible = NSScreen.screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame
+        let size = BasketView.size
+        return CGRect(x: (screenFrame.width - size.width) / 2, y: visible.minY - screenFrame.minY + 12, width: size.width, height: size.height)
+    }
+
+    private var basketShown = false
+
+    /// Rises up from below the bottom of the screen on a spring, or sinks back down.
+    private func setBasketShown(_ shown: Bool) {
+        guard shown != basketShown else { return }
+        basketShown = shown
+        let rest = basketRestFrame
+        let depth = rest.maxY + 20
+        basket.frame = rest
+        guard let layer = basket.layer else { basket.isHidden = !shown; return }
+        // The offset rides on top of the basket's own transform, so it composes with its bounces.
+        let current = (layer.presentation()?.value(forKeyPath: "transform.translation.y") as? CGFloat) ?? (shown ? -depth : 0)
+        let slide = CABasicAnimation(keyPath: "transform.translation.y")
+        slide.isAdditive = true
+        if shown {
+            basket.isHidden = false
+            layer.removeAnimation(forKey: "sink")
+            let rise = Motion.spring("transform.translation.y", from: current == 0 ? -depth : current, to: 0, duration: 0.5, bounce: 0.25)
+            rise.isAdditive = true
+            layer.add(rise, forKey: "rise")
+        } else {
+            slide.fromValue = 0
+            slide.toValue = -depth
+            slide.duration = 0.25
+            slide.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            slide.fillMode = .forwards
+            slide.isRemovedOnCompletion = false
+            Motion.run(on: layer, ["sink": slide]) { [weak self] in
+                guard let self, !self.basketShown else { return }
+                self.basket.isHidden = true
+                layer.removeAnimation(forKey: "sink")
+            }
+        }
+    }
+
+    /// Where falling photos land, in window coordinates.
+    private var basketMouth: CGPoint {
+        let rest = basketRestFrame
+        return CGPoint(x: rest.minX + basket.mouth.x, y: rest.minY + basket.mouth.y)
+    }
+
+    private func beginCarrying(_ entry: HistoryEntry, _ loose: CALayer, from frame: CGRect) {
+        closeBasketPanel()
+        loose.position = CGPoint(x: frame.midX, y: frame.midY)
+        content.layer?.addSublayer(loose)
+        let mouse = mouseLocationOutsideOfEventStream
+        let carried = Carried(entry: entry, layer: loose, grab: CGPoint(x: mouse.x - frame.midX, y: mouse.y - frame.midY), at: mouse)
+        carried.lift()
+        self.carried = carried
+        updateBasket()
+    }
+
+    private func carry(to point: CGPoint) {
+        guard let carried else { return }
+        carried.move(to: point)
+        basket.isReady = hypot(point.x - basketMouth.x, point.y - basketMouth.y) < 180
+    }
+
+    /// Wherever it's let go, the photo falls into the basket, keeping the speed it was let go at.
+    private func letGo(at point: CGPoint) {
+        guard let carried else { return }
+        self.carried = nil
+        basket.isReady = false
+        fall(carried.layer, entry: carried.entry, velocity: carried.velocity)
+    }
+
+    /// Throws the newest photo without a key press (`--clothesline --throw`), after the lines settle.
+    func throwNewest() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, case .open = self.phase, let entry = self.clothesline.entries.last,
+                  let (loose, frame) = self.clothesline.pullOff(entry) else { return }
+            self.toss(loose, from: frame, entry: entry)
+        }
+    }
+
+    /// Delete: the photo in the preview, or the one under the mouse.
+    private func throwAwayFromKeyboard() {
+        if let entry = preview.entry, let (loose, frame) = preview.takePicture() {
+            _ = clothesline.pullOff(entry)
+            toss(loose, from: frame, entry: entry)
+        } else if let entry = clothesline.hoveredEntry, let (loose, frame) = clothesline.pullOff(entry) {
+            toss(loose, from: frame, entry: entry)
+        }
+    }
+
+    /// Without a drag to give it speed, the photo gets a small hop before it falls.
+    private func toss(_ loose: CALayer, from frame: CGRect, entry: HistoryEntry) {
+        loose.position = CGPoint(x: frame.midX, y: frame.midY)
+        content.layer?.addSublayer(loose)
+        fall(loose, entry: entry, velocity: CGVector(dx: 0, dy: 380))
+    }
+
+    /// Falls under gravity from where it is, with the speed it has, and curves into the basket: the
+    /// path is worked out frame by frame like a thrown object, so it speeds up as it drops. It
+    /// turns with its sideways speed and shrinks as it goes in over the rim.
+    private func fall(_ photo: CALayer, entry: HistoryEntry, velocity: CGVector) {
+        falling += 1
+        closeBasketPanel()
+        updateBasket()
+        let start = photo.presentation()?.position ?? photo.position, end = basketMouth
+        let gravity: CGFloat = 3200
+        let vx = min(max(velocity.dx, -1600), 1600)
+        var vy = min(max(velocity.dy, -1400), 900)
+        let drop = start.y - end.y
+        // Starting below the rim, it has to be tossed up and over.
+        if drop < 0 { vy = max(vy, sqrt(2 * gravity * -drop) + 220) }
+        let flight = min(max((vy + sqrt(vy * vy + 2 * gravity * drop)) / gravity, 0.38), 1.1)
+        // The sideways pull that lands it in the basket despite its own sideways speed.
+        let pull = 2 * (end.x - start.x - vx * flight) / (flight * flight)
+
+        let steps = 48
+        var points: [NSValue] = []
+        var angles: [NSNumber] = []
+        var scales: [NSNumber] = []
+        let startAngle = (photo.presentation()?.value(forKeyPath: "transform.rotation.z") as? CGFloat) ?? 0
+        let startScale = (photo.presentation()?.value(forKeyPath: "transform.scale") as? CGFloat) ?? 1
+        let endScale = min(startScale, 44 / max(photo.bounds.width, photo.bounds.height, 1))
+        let spin = min(max(((end.x - start.x) / flight) * 0.0012 + (vx >= 0 ? 0.35 : -0.35), -1.4), 1.4)
+        for step in 0...steps {
+            let u = CGFloat(step) / CGFloat(steps), t = u * flight
+            points.append(NSValue(point: CGPoint(x: start.x + vx * t + pull * t * t / 2, y: start.y + vy * t - gravity * t * t / 2)))
+            angles.append(NSNumber(value: Double(startAngle + spin * u)))
+            scales.append(NSNumber(value: Double(startScale - (startScale - endScale) * u * u * u)))
+        }
+
+        let move = CAKeyframeAnimation(keyPath: "position")
+        move.values = points
+        let turn = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+        turn.values = angles
+        let shrink = CAKeyframeAnimation(keyPath: "transform.scale")
+        shrink.values = scales
+        let fade = CAKeyframeAnimation(keyPath: "opacity")
+        fade.values = [1, 1, 0]
+        fade.keyTimes = [0, 0.9, 1]
+        let group = CAAnimationGroup()
+        group.animations = [move, turn, shrink, fade]
+        group.duration = Double(flight)
+
+        photo.removeAllAnimations()
+        Motion.immediately {
+            photo.position = end
+            photo.opacity = 0
+        }
+        Motion.run(on: photo, ["fall": group]) { [weak self] in
+            photo.removeFromSuperlayer()
+            self?.landed(entry)
+        }
+    }
+
+    private func landed(_ entry: HistoryEntry) {
+        falling -= 1
+        HistoryLibrary.shared.throwIntoBasket([entry])
+        thrown.append(entry)
+        basket.bounce()
+        TrashSound.moveToTrash.play()
+        updateBasket()
+    }
+
+    /// ⌘Z: the last photo thrown goes back on its line.
+    private func hangBackLastThrown() {
+        guard let entry = thrown.popLast() else { return }
+        hangBack([entry])
+    }
+
+    private func hangBack(_ entries: [HistoryEntry]) {
+        closeBasketPanel()
+        HistoryLibrary.shared.restore(entries)
+        thrown.removeAll { entries.contains($0) }
+        reloadLines(dropping: entries.count == 1 ? entries[0] : nil)
+        updateBasket()
+    }
+
+    /// Opens the basket without a click (`--clothesline --basket`).
+    func openBasket() {
+        guard case .open = phase, basketPanel == nil else { return }
+        toggleBasketPanel()
+    }
+
+    private func toggleBasketPanel() {
+        if basketPanel != nil { return closeBasketPanel() }
+        let entries = HistoryLibrary.shared.basket()
+        guard !entries.isEmpty else { return }
+        let panel = BasketPanel(entries: entries)
+        panel.onRestore = { [weak self] entries in self?.hangBack(entries) }
+        panel.onEmpty = { [weak self] in self?.emptyBasket() }
+        let rest = basketRestFrame
+        let x = min(max(rest.midX - panel.frame.width / 2, 12), content.bounds.width - panel.frame.width - 12)
+        panel.setFrameOrigin(CGPoint(x: x, y: rest.maxY + 28))
+        content.addSubview(panel)
+        basketPanel = panel
+        panel.appear()
+    }
+
+    private func closeBasketPanel() {
+        basketPanel?.disappear()
+        basketPanel = nil
+    }
+
+    /// The basket tips out, then the captures are deleted for good and it sinks away.
+    private func emptyBasket() {
+        closeBasketPanel()
+        TrashSound.emptyTrash.play()
+        basket.tipOut { [weak self] in
+            HistoryLibrary.shared.emptyBasket()
+            self?.thrown = []
+            self?.updateBasket()
+        }
     }
 
     private func animate(to frame: CGRect, duration: TimeInterval) {
@@ -351,4 +625,71 @@ private final class HandleView: NSView {
     override func mouseDown(with event: NSEvent) { onMouseDown?() }
     override func mouseDragged(with event: NSEvent) { onMouseDragged?() }
     override func mouseUp(with event: NSEvent) { onMouseUp?() }
+}
+
+/// A photo in hand after it came off the line: it lifts toward the viewer, follows the mouse, and
+/// leans with how fast it's moved, like something held by its corner.
+@MainActor
+private final class Carried {
+    let entry: HistoryEntry
+    let layer: CALayer
+    /// The mouse's offset from the photo's center.
+    private let grab: CGPoint
+    private var lastPoint: CGPoint
+    private var lastTime = CACurrentMediaTime()
+    private var smoothedVelocity = CGVector.zero
+    private var lean: CGFloat = 0
+    private let restAngle: CGFloat
+
+    private static let liftScale: CGFloat = 1.06
+
+    init(entry: HistoryEntry, layer: CALayer, grab: CGPoint, at point: CGPoint) {
+        self.entry = entry
+        self.layer = layer
+        self.grab = grab
+        lastPoint = point
+        restAngle = (layer.value(forKeyPath: "transform.rotation.z") as? CGFloat) ?? 0
+    }
+
+    /// Comes up off the line: a little larger, with a deeper, softer shadow.
+    func lift() {
+        let resting = layer.transform
+        let lifted = transform(angle: restAngle)
+        Motion.immediately {
+            layer.transform = lifted
+            layer.shadowRadius = 14
+            layer.shadowOpacity = 0.35
+            layer.shadowOffset = CGSize(width: 0, height: -10)
+        }
+        layer.add(Motion.spring("transform", from: NSValue(caTransform3D: resting), to: NSValue(caTransform3D: lifted), duration: 0.3, bounce: 0.3), forKey: "lift")
+        for (key, from, to) in [("shadowRadius", 4.0, 14.0), ("shadowOpacity", 0.45, 0.35)] {
+            layer.add(Motion.spring(key, from: from, to: to, duration: 0.3), forKey: key)
+        }
+    }
+
+    /// How fast it was moving when let go; held still for a moment first, it's just dropped.
+    var velocity: CGVector {
+        CACurrentMediaTime() - lastTime > 0.08 ? .zero : smoothedVelocity
+    }
+
+    func move(to point: CGPoint) {
+        let now = CACurrentMediaTime()
+        let elapsed = max(now - lastTime, 1.0 / 240)
+        let instant = CGVector(dx: (point.x - lastPoint.x) / elapsed, dy: (point.y - lastPoint.y) / elapsed)
+        // Smoothed, so one jittery event doesn't fling it.
+        smoothedVelocity = CGVector(dx: smoothedVelocity.dx * 0.6 + instant.dx * 0.4, dy: smoothedVelocity.dy * 0.6 + instant.dy * 0.4)
+        lastPoint = point
+        lastTime = now
+        // Swings opposite to the motion and settles back when the mouse stops.
+        let target = min(max(-smoothedVelocity.dx * 0.00035, -0.35), 0.35)
+        lean += (target - lean) * 0.25
+        Motion.immediately {
+            layer.position = CGPoint(x: point.x - grab.x, y: point.y - grab.y)
+            layer.transform = transform(angle: restAngle + lean)
+        }
+    }
+
+    private func transform(angle: CGFloat) -> CATransform3D {
+        CATransform3DScale(CATransform3DMakeRotation(angle, 0, 0, 1), Self.liftScale, Self.liftScale, 1)
+    }
 }

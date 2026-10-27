@@ -76,7 +76,13 @@ final class HistoryLibrary {
         (try? database?.recent(limit: limit)) ?? []
     }
 
+    /// Captures on the lines, not counting the basket.
     var count: Int { (try? database?.count()) ?? 0 }
+
+    /// The laundry basket, most recently thrown first.
+    func basket() -> [HistoryEntry] {
+        (try? database?.basket()) ?? []
+    }
 
     func thumbnail(for entry: HistoryEntry) -> NSImage? {
         NSImage(contentsOf: thumbnails.appendingPathComponent("\(entry.id.uuidString).jpg"))
@@ -96,14 +102,49 @@ final class HistoryLibrary {
             .reduce(Int64(0)) { $0 + Int64($1) }
     }
 
+    // MARK: The laundry basket
+
+    /// Days a capture stays in the basket before it's emptied for good.
+    static let basketDays = 7
+
+    /// Takes captures off the line into the basket, where they can still be restored.
+    func throwIntoBasket(_ entries: [HistoryEntry]) {
+        setTrashed(Date(), entries)
+    }
+
+    /// Hangs captures from the basket back on the line.
+    func restore(_ entries: [HistoryEntry]) {
+        setTrashed(nil, entries)
+    }
+
+    /// Deletes everything in the basket for good.
+    func emptyBasket() {
+        remove(basket().map(\.id))
+    }
+
+    private func setTrashed(_ date: Date?, _ entries: [HistoryEntry]) {
+        do {
+            try database?.setTrashed(date, ids: entries.map(\.id))
+        } catch {
+            NSLog("PixSnap could not update the basket: \(error)")
+            return
+        }
+        revision += 1
+    }
+
     // MARK: Removing
 
-    /// Removes captures older than the retention period, except favorites.
+    /// Removes captures older than the retention period, except favorites, and basket captures
+    /// thrown more than `basketDays` ago.
     func cleanUp() {
-        guard let database, let days = settings.historyRetentionDays else { return }
-        let cutoff = Date().addingTimeInterval(-Double(days) * 24 * 60 * 60)
-        guard let expired = try? database.ids(createdBefore: cutoff), !expired.isEmpty else { return }
-        remove(expired)
+        guard let database else { return }
+        var expired = (try? database.ids(trashedBefore: Date().addingTimeInterval(-Double(Self.basketDays) * 24 * 60 * 60))) ?? []
+        if let days = settings.historyRetentionDays {
+            let cutoff = Date().addingTimeInterval(-Double(days) * 24 * 60 * 60)
+            expired += (try? database.ids(createdBefore: cutoff)) ?? []
+        }
+        guard !expired.isEmpty else { return }
+        remove(Array(Set(expired)))
     }
 
     /// Removes everything, favorites included.

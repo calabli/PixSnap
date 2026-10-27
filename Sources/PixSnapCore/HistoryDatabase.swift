@@ -16,10 +16,14 @@ public struct HistoryEntry: Equatable, Sendable {
     public var isFavorite: Bool
     /// Filled in later by text recognition, for search.
     public var ocrText: String?
+    /// When it was thrown into the laundry basket; nil while it hangs on the line. Basket entries
+    /// are left out of `recent` and `count` until restored, and emptied for good later.
+    public var trashedAt: Date?
 
     public init(
         id: UUID = UUID(), createdAt: Date, pixelWidth: Int, pixelHeight: Int, scale: Double,
-        sourceAppName: String? = nil, sourceBundleID: String? = nil, isFavorite: Bool = false, ocrText: String? = nil
+        sourceAppName: String? = nil, sourceBundleID: String? = nil, isFavorite: Bool = false, ocrText: String? = nil,
+        trashedAt: Date? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -30,6 +34,7 @@ public struct HistoryEntry: Equatable, Sendable {
         self.sourceBundleID = sourceBundleID
         self.isFavorite = isFavorite
         self.ocrText = ocrText
+        self.trashedAt = trashedAt
     }
 }
 
@@ -64,6 +69,18 @@ public final class HistoryDatabase {
             )
             """)
         try execute("CREATE INDEX IF NOT EXISTS captures_created_at ON captures (created_at)")
+        try migrate()
+    }
+
+    /// Schema changes since the first version, tracked in `user_version`.
+    private func migrate() throws {
+        var version = 0
+        try step("PRAGMA user_version", []) { version = Int(sqlite3_column_int64($0, 0)) }
+        if version < 1 {
+            // 1: the laundry basket.
+            try execute("ALTER TABLE captures ADD COLUMN trashed_at REAL")
+            try execute("PRAGMA user_version = 1")
+        }
     }
 
     deinit {
@@ -82,9 +99,14 @@ public final class HistoryDatabase {
             ])
     }
 
-    /// Newest first.
+    /// Newest first, leaving out the basket.
     public func recent(limit: Int) throws -> [HistoryEntry] {
-        try query("SELECT \(Self.columns) FROM captures ORDER BY created_at DESC LIMIT ?", [.integer(limit)])
+        try query("SELECT \(Self.columns) FROM captures WHERE trashed_at IS NULL ORDER BY created_at DESC LIMIT ?", [.integer(limit)])
+    }
+
+    /// What's in the laundry basket, most recently thrown first.
+    public func basket() throws -> [HistoryEntry] {
+        try query("SELECT \(Self.columns) FROM captures WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC", [])
     }
 
     public func entry(id: UUID) throws -> HistoryEntry? {
@@ -93,7 +115,7 @@ public final class HistoryDatabase {
 
     public func count() throws -> Int {
         var total = 0
-        try step("SELECT COUNT(*) FROM captures", []) { total = Int(sqlite3_column_int64($0, 0)) }
+        try step("SELECT COUNT(*) FROM captures WHERE trashed_at IS NULL", []) { total = Int(sqlite3_column_int64($0, 0)) }
         return total
     }
 
@@ -101,14 +123,24 @@ public final class HistoryDatabase {
         try run("UPDATE captures SET is_favorite = ? WHERE id = ?", [.integer(isFavorite ? 1 : 0), .text(id.uuidString)])
     }
 
+    /// Into the basket at `date`, or back on the line with nil.
+    public func setTrashed(_ date: Date?, ids: [UUID]) throws {
+        try transaction {
+            for id in ids {
+                try run("UPDATE captures SET trashed_at = ? WHERE id = ?", [date.map { .real($0.timeIntervalSince1970) } ?? .null, .text(id.uuidString)])
+            }
+        }
+    }
+
+    /// IDs of basket entries thrown before `date`.
+    public func ids(trashedBefore date: Date) throws -> [UUID] {
+        try ids("SELECT id FROM captures WHERE trashed_at < ?", [.real(date.timeIntervalSince1970)])
+    }
+
     /// IDs of entries taken before `date`; favorites are left out unless asked for.
     public func ids(createdBefore date: Date, includingFavorites: Bool = false) throws -> [UUID] {
         let sql = "SELECT id FROM captures WHERE created_at < ?" + (includingFavorites ? "" : " AND is_favorite = 0")
-        var ids: [UUID] = []
-        try step(sql, [.real(date.timeIntervalSince1970)]) { statement in
-            if let text = sqlite3_column_text(statement, 0), let id = UUID(uuidString: String(cString: text)) { ids.append(id) }
-        }
-        return ids
+        return try ids(sql, [.real(date.timeIntervalSince1970)])
     }
 
     public func allIDs() throws -> [UUID] {
@@ -117,26 +149,22 @@ public final class HistoryDatabase {
 
     public func delete(ids: [UUID]) throws {
         guard !ids.isEmpty else { return }
-        try execute("BEGIN")
-        do {
+        try transaction {
             for id in ids { try run("DELETE FROM captures WHERE id = ?", [.text(id.uuidString)]) }
-            try execute("COMMIT")
-        } catch {
-            try? execute("ROLLBACK")
-            throw error
         }
     }
 
     // MARK: SQLite plumbing
 
     private static let columns =
-        "id, created_at, pixel_width, pixel_height, scale, source_app_name, source_bundle_id, is_favorite, ocr_text"
+        "id, created_at, pixel_width, pixel_height, scale, source_app_name, source_bundle_id, is_favorite, ocr_text, trashed_at"
 
     private enum Value {
         case text(String)
         case optionalText(String?)
         case integer(Int)
         case real(Double)
+        case null
     }
 
     /// Tells SQLite to copy bound strings, since Swift's buffers don't outlive the call.
@@ -144,6 +172,25 @@ public final class HistoryDatabase {
 
     private func execute(_ sql: String) throws {
         guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else { throw lastError() }
+    }
+
+    private func transaction(_ body: () throws -> Void) throws {
+        try execute("BEGIN")
+        do {
+            try body()
+            try execute("COMMIT")
+        } catch {
+            try? execute("ROLLBACK")
+            throw error
+        }
+    }
+
+    private func ids(_ sql: String, _ values: [Value]) throws -> [UUID] {
+        var ids: [UUID] = []
+        try step(sql, values) { statement in
+            if let text = sqlite3_column_text(statement, 0), let id = UUID(uuidString: String(cString: text)) { ids.append(id) }
+        }
+        return ids
     }
 
     private func run(_ sql: String, _ values: [Value]) throws {
@@ -175,6 +222,8 @@ public final class HistoryDatabase {
                 sqlite3_bind_int64(statement, index, Int64(number))
             case .real(let number):
                 sqlite3_bind_double(statement, index, number)
+            case .null:
+                sqlite3_bind_null(statement, index)
             }
         }
 
@@ -201,7 +250,8 @@ public final class HistoryDatabase {
             sourceAppName: text(5),
             sourceBundleID: text(6),
             isFavorite: sqlite3_column_int64(statement, 7) != 0,
-            ocrText: text(8)
+            ocrText: text(8),
+            trashedAt: sqlite3_column_type(statement, 9) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 9))
         )
     }
 

@@ -60,11 +60,12 @@ struct SettingsView: View {
     /// Shows or hides the notch handles after the toggle changes.
     var onNotchSettingChange: () -> Void = {}
 
-    /// "85 张 · 42.3 MB"
+    /// "85 张 · 42.3 MB", or "85 张 · 洗衣篮 3 张 · 42.3 MB"
     private var historyUsage: String {
         _ = history.revision
         let size = ByteCountFormatter.string(fromByteCount: history.diskUsage(), countStyle: .file)
-        return "\(history.count) 张 · \(size)"
+        let basket = history.basket().count
+        return basket == 0 ? "\(history.count) 张 · \(size)" : "\(history.count) 张 · 洗衣篮 \(basket) 张 · \(size)"
     }
 
     var body: some View {
@@ -121,7 +122,7 @@ struct SettingsView: View {
                 .onChange(of: settings.historyRetentionDays) { history.cleanUp() }
                 LabeledContent("已保存", value: historyUsage)
                 HStack {
-                    Text("只保存在这台 Mac 上；收藏的截图不会被自动清理。")
+                    Text("只保存在这台 Mac 上；收藏的截图不会被自动清理。扔进洗衣篮的截图 \(HistoryLibrary.basketDays) 天后删除。")
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer()
                 }
