@@ -62,6 +62,21 @@ final class CaptureCoordinator {
         openEditor(for: capture, on: screen)
     }
 
+    /// Development: records an image file in history as if it had just been captured.
+    func addToHistory(imageAt url: URL) {
+        guard let capture = Self.loadCapture(at: url) else { return }
+        HistoryLibrary.shared.add(capture, sourceApp: NSWorkspace.shared.frontmostApplication)
+    }
+
+    /// Floats a capture from history in the middle of the screen under the cursor.
+    func pinHistoryEntry(_ entry: HistoryEntry) {
+        let mouse = NSEvent.mouseLocation
+        guard let capture = HistoryLibrary.shared.loadCapture(entry),
+              let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main
+        else { return }
+        pin(capture, at: ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame), on: screen)
+    }
+
     /// Floats an image file in the middle of the screen under the cursor, optionally pinned (no bar).
     func pinImage(at url: URL, pinned: Bool = false) {
         let mouse = NSEvent.mouseLocation
@@ -187,6 +202,8 @@ final class CaptureCoordinator {
             viewSize: frozen.screen.frame.size,
             imageSize: frozen.imageSize
         )
+        // The app that was in front when the capture started, recorded in history ("微信", "Figma"…).
+        let sourceApp = previousApp
         endSession()
         guard pixelRect.width >= 1, pixelRect.height >= 1,
               let cropped = frozen.image.cropping(to: pixelRect) else { return }
@@ -194,6 +211,7 @@ final class CaptureCoordinator {
         let scale = frozen.screen.backingScaleFactor
         let capture = Capture(image: cropped, scale: scale)
         if AppSettings.shared.copiesAfterCapture { ImageExporter.copyToPasteboard(capture) }
+        HistoryLibrary.shared.add(capture, sourceApp: sourceApp)
         // Pin it exactly where it was taken (pixel rect has a top-left origin; the screen a bottom-left one).
         let screenFrame = frozen.screen.frame
         let imageFrame = CGRect(

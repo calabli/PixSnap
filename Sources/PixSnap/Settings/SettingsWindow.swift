@@ -50,6 +50,15 @@ struct SettingsView: View {
     @Bindable var settings: AppSettings
     @Bindable var recorder: ShortcutRecorder
     @State private var loginError: String?
+    @State private var confirmingClear = false
+    private let history = HistoryLibrary.shared
+
+    /// "85 张 · 42.3 MB"
+    private var historyUsage: String {
+        _ = history.revision
+        let size = ByteCountFormatter.string(fromByteCount: history.diskUsage(), countStyle: .file)
+        return "\(history.count) 张 · \(size)"
+    }
 
     var body: some View {
         Form {
@@ -90,6 +99,33 @@ struct SettingsView: View {
                     Button("恢复默认") { settings.saveFolder = AppSettings.defaultSaveFolder }
                         .disabled(settings.saveFolder == AppSettings.defaultSaveFolder)
                 }
+            }
+
+            Section("截图历史") {
+                Toggle("保存截图历史", isOn: $settings.savesHistory)
+                Picker("保留时长", selection: $settings.historyRetentionDays) {
+                    ForEach(AppSettings.historyRetentionChoices, id: \.self) { days in
+                        Text(days.map { "\($0) 天" } ?? "永久").tag(days)
+                    }
+                }
+                .onChange(of: settings.historyRetentionDays) { history.cleanUp() }
+                LabeledContent("已保存", value: historyUsage)
+                HStack {
+                    Text("只保存在这台 Mac 上；收藏的截图不会被自动清理。")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                HStack {
+                    Spacer()
+                    Button("在访达中显示") { NSWorkspace.shared.open(history.folder) }
+                    Button("清空历史…", role: .destructive) { confirmingClear = true }
+                        .disabled(history.count == 0)
+                }
+            }
+            .confirmationDialog("清空全部截图历史？", isPresented: $confirmingClear) {
+                Button("清空", role: .destructive) { history.removeAll() }
+            } message: {
+                Text("会删除 \(history.count) 张截图，包括收藏的，无法恢复。已经保存到“保存位置”的文件不受影响。")
             }
 
             Section("通用") {

@@ -22,6 +22,18 @@ final class AppSettings {
         didSet { defaults.set(saveFolder.path, forKey: Keys.saveFolderPath) }
     }
 
+    /// Whether every capture is kept in history (on by default).
+    var savesHistory: Bool {
+        didSet { defaults.set(savesHistory, forKey: Keys.savesHistory) }
+    }
+
+    /// Days to keep captures in history; nil keeps them forever. Favorites are always kept.
+    var historyRetentionDays: Int? {
+        didSet { defaults.set(historyRetentionDays ?? 0, forKey: Keys.historyRetentionDays) }
+    }
+
+    static let historyRetentionChoices: [Int?] = [7, 30, 90, nil]
+
     private(set) var launchAtLoginStatus: SMAppService.Status
 
     static let defaultSaveFolder = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]
@@ -33,6 +45,9 @@ final class AppSettings {
         static let captureShortcut = "captureShortcut"
         static let copiesAfterCapture = "copiesAfterCapture"
         static let saveFolderPath = "saveFolderPath"
+        static let savesHistory = "savesHistory"
+        /// 0 means forever.
+        static let historyRetentionDays = "historyRetentionDays"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -42,6 +57,9 @@ final class AppSettings {
         copiesAfterCapture = defaults.bool(forKey: Keys.copiesAfterCapture)
         saveFolder = defaults.string(forKey: Keys.saveFolderPath)
             .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? Self.defaultSaveFolder
+        savesHistory = defaults.object(forKey: Keys.savesHistory) as? Bool ?? true
+        let days = defaults.object(forKey: Keys.historyRetentionDays) as? Int ?? 30
+        historyRetentionDays = days > 0 ? days : nil
         launchAtLoginStatus = SMAppService.mainApp.status
     }
 

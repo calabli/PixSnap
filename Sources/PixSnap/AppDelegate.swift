@@ -1,9 +1,12 @@
 import AppKit
+import PixSnapCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var captureMenuItem: NSMenuItem?
+    private let recentMenu = NSMenu()
+    private var recentEntries: [UUID: HistoryEntry] = [:]
     private let coordinator = CaptureCoordinator()
     private lazy var captureShortcut = CaptureShortcutService { [weak self] in self?.coordinator.startCapture() }
     private lazy var settingsWindow = SettingsWindowController(shortcutService: captureShortcut)
@@ -12,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
         Task { await ScreenCapturer.shared.warmUp() }
+        HistoryLibrary.shared.cleanUp()
 
         captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItem() }
         if !captureShortcut.start() {
@@ -32,6 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]), pinned: arguments.contains("--pinned"))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
+        if let flag = arguments.firstIndex(of: "--history-add"), arguments.indices.contains(flag + 1) {
+            coordinator.addToHistory(imageAt: URL(fileURLWithPath: arguments[flag + 1]))
+        }
         if let flag = arguments.firstIndex(of: "--overlay"), arguments.indices.contains(flag + 1) {
             coordinator.showOverlay(forImageAt: URL(fileURLWithPath: arguments[flag + 1]))
         }
@@ -54,6 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let capture = NSMenuItem(title: "截取区域", action: #selector(captureFromMenu), keyEquivalent: "")
         menu.addItem(capture)
         captureMenuItem = capture
+        let recent = NSMenuItem(title: "最近截图", action: nil, keyEquivalent: "")
+        recentMenu.delegate = self
+        recent.submenu = recentMenu
+        menu.addItem(recent)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "打开截图文件夹", action: #selector(openSaveFolder), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ","))
@@ -86,6 +97,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.title = "截取区域（\(shortcut.displayString)）"
             item.keyEquivalent = ""
         }
+    }
+
+    // MARK: Recent captures
+
+    private static let recentDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        formatter.doesRelativeDateFormatting = true // "今天 14:32"
+        return formatter
+    }()
+
+    /// Rebuilt every time the submenu opens, so it's always current.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === recentMenu else { return }
+        menu.removeAllItems()
+        let library = HistoryLibrary.shared
+        let entries = library.recent(limit: 8)
+        recentEntries = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+
+        guard !entries.isEmpty else {
+            let empty = NSMenuItem(title: AppSettings.shared.savesHistory ? "还没有截图" : "截图历史已在设置中关闭", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+            return
+        }
+        for entry in entries {
+            var title = Self.recentDateFormatter.string(from: entry.createdAt)
+            if let app = entry.sourceAppName { title += " · \(app)" }
+            let item = NSMenuItem(title: title, action: #selector(pinRecent(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = entry.id
+            item.toolTip = "\(entry.pixelWidth) × \(entry.pixelHeight)，点击浮动到屏幕上"
+            if let thumbnail = library.thumbnail(for: entry) {
+                // Fit within 64 × 40 points, keeping the aspect ratio.
+                let fit = min(64 / max(thumbnail.size.width, 1), 40 / max(thumbnail.size.height, 1))
+                thumbnail.size = CGSize(width: (thumbnail.size.width * fit).rounded(), height: (thumbnail.size.height * fit).rounded())
+                item.image = thumbnail
+            }
+            menu.addItem(item)
+        }
+    }
+
+    @objc private func pinRecent(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID, let entry = recentEntries[id] else { return }
+        coordinator.pinHistoryEntry(entry)
     }
 
     @objc private func captureFromMenu() {

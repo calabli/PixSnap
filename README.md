@@ -27,6 +27,7 @@ swift test
 ## 当前功能（MVP 进行中）
 
 - 菜单栏常驻，全局快捷键默认 ⌘⇧2
+- 截图历史：每次截图自动保存原图（HEIC）、缩略图和记录（时间、尺寸、来源应用），存在 `~/Library/Application Support/PixSnap/History/`（记录在 SQLite 里）；菜单栏 › 最近截图 显示最近 8 张，点一下重新浮动到屏幕上；设置里可以关闭历史、选保留时长（7 / 30 / 90 天 / 永久，默认 30 天，收藏的不清理）、查看占用空间、清空历史
 - 设置（菜单栏 › 设置…，⌘,）：自定义截图快捷键（需要 ⌘、⌥ 或 ⌃，F1–F12 可单独使用；被占用时会提示）、截图后是否自动复制（默认关闭）、保存位置（默认“图片/PixSnap”）、登录时打开
 - 截图时先冻结屏幕，再在静止画面上选择；支持多显示器和 Retina
 - 拖动选择区域，或单击自动高亮的窗口；显示像素尺寸；Esc 或右键取消
@@ -36,7 +37,7 @@ swift test
 - 钉住（图钉）：隐藏操作栏，只留图片置顶在屏幕上，可以拖动；鼠标悬停时右上角出现图钉，点它取消钉住；右键菜单里有取消钉住、编辑模式、复制、保存、关闭
 - 编辑模式（完整编辑器）：标注会带过去并保持可编辑；复制、保存后不关闭；点“退出编辑”（或 Esc、回车、⌘W、红色按钮）后截图连同标注继续浮在屏幕上
 - 编辑模式工具：选择/移动（V）、矩形（R）、箭头（A）、文字（T）、序号（N）、马赛克（M）、裁剪（C）；6 种颜色、3 档粗细；选中后改颜色和粗细、Delete 删除、双击文字重新编辑；⌘Z / ⇧⌘Z 撤销重做，⌘C 复制，⌘S 保存
-- 开发调试：`PixSnap --edit <图片路径>` 用编辑器打开图片，`PixSnap --pin <图片路径> [--pinned]` 把图片浮动在屏幕中间（加 `--pinned` 直接钉住），`PixSnap --settings` 启动后直接打开设置，`PixSnap --overlay <图片路径>` 在图片上显示选区界面
+- 开发调试：`PixSnap --edit <图片路径>` 用编辑器打开图片，`PixSnap --pin <图片路径> [--pinned]` 把图片浮动在屏幕中间（加 `--pinned` 直接钉住），`PixSnap --settings` 启动后直接打开设置，`PixSnap --history-add <图片路径>` 把图片当作一次截图存进历史，`PixSnap --overlay <图片路径>` 在图片上显示选区界面
 
 ## 多屏和全屏
 
@@ -62,7 +63,7 @@ scripts/build-app.sh release && open build/PixSnap.app --args --benchmark-captur
 
 | 路径 | 内容 |
 | --- | --- |
-| `Sources/PixSnapCore` | 与平台无关的逻辑（选区几何、文件命名、标注数据模型、撤销重做），以后可与 Windows 版共享 |
+| `Sources/PixSnapCore` | 与平台无关的逻辑（选区几何、多屏坐标、文件命名、标注数据模型、撤销重做、历史数据库），以后可与 Windows 版共享 |
 | `Sources/PixSnapRender` | 用 Core Graphics 绘制标注，编辑器画布和导出图片共用同一套代码 |
 | `Sources/PixSnap` | macOS 应用：菜单栏、快捷键、ScreenCaptureKit 截图、选区界面、浮动截图、标注编辑器 |
 | `Tests/PixSnapCoreTests` | 核心模块单元测试 |
