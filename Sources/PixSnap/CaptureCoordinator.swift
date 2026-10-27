@@ -62,13 +62,14 @@ final class CaptureCoordinator {
         openEditor(for: capture, on: screen)
     }
 
-    /// Pins an image file in the middle of the screen under the cursor.
-    func pinImage(at url: URL) {
+    /// Floats an image file in the middle of the screen under the cursor, optionally pinned (no bar).
+    func pinImage(at url: URL, pinned: Bool = false) {
         let mouse = NSEvent.mouseLocation
         guard let capture = Self.loadCapture(at: url),
               let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main
         else { return }
         pin(capture, at: ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame), on: screen)
+        if pinned { floatingCaptures.last?.setPinned(true) }
     }
 
     /// Development: shows the selection overlay over an image file instead of the live screen.

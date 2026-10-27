@@ -1,9 +1,12 @@
 import AppKit
 import PixSnapCore
 
-/// A finished capture pinned on screen where it was taken. The bar underneath has quick annotation
-/// tools that draw right on the image, plus edit mode, copy, save and close. With no tool selected,
-/// dragging the image moves it; double-click opens edit mode; Esc drops the tool, then closes.
+/// A finished capture floating on screen where it was taken. The bar underneath has quick annotation
+/// tools that draw right on the image, plus pin, edit mode, copy, save and close. With no tool
+/// selected, dragging the image moves it; double-click opens edit mode; Esc drops the tool, then closes.
+///
+/// Pinned (图钉): the bar goes away and only the image stays on top of everything, still draggable.
+/// Hovering shows a pin in its corner that unpins it; right-click has the other actions.
 @MainActor
 final class FloatingCaptureWindow: NSPanel {
     var onEdit: ((FloatingCaptureWindow) -> Void)?
@@ -13,7 +16,9 @@ final class FloatingCaptureWindow: NSPanel {
     private let canvas: CanvasView
     private let bar = ActionBar()
     private let feedback = FeedbackBadge()
-    private let imageRect: CGRect
+    private let unpinButton = NSButton()
+    private var imageRect: CGRect
+    private(set) var isPinned = false
 
     /// Annotations so far, handed to edit mode and back.
     var history: EditHistory<AnnotationDocument> { canvas.history }
@@ -59,19 +64,91 @@ final class FloatingCaptureWindow: NSPanel {
         bar.frame = layout.bar
         bar.onTool = { [weak self] tool in self?.setTool(tool) }
         bar.onUndo = { [weak self] in self?.canvas.undo() }
+        bar.onPin = { [weak self] in self?.setPinned(true) }
         bar.onEdit = { [weak self] in self?.edit() }
         bar.onCopy = { [weak self] in self?.copyImage() }
         bar.onSave = { [weak self] in self?.saveImage() }
         bar.onClose = { [weak self] in self?.close() }
 
-        let content = NSView(frame: CGRect(origin: .zero, size: layout.window.size))
+        unpinButton.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "取消钉住")
+        unpinButton.toolTip = "取消钉住，显示操作栏"
+        unpinButton.bezelStyle = .circular
+        unpinButton.target = self
+        unpinButton.action = #selector(unpin)
+        unpinButton.isHidden = true
+
+        let content = HoverView(frame: CGRect(origin: .zero, size: layout.window.size))
+        content.onHoverChanged = { [weak self] hovering in
+            guard let self else { return }
+            unpinButton.isHidden = !(isPinned && hovering)
+        }
         content.addSubview(canvas)
         content.addSubview(bar)
         feedback.frame = layout.image
         content.addSubview(feedback)
+        content.addSubview(unpinButton)
         contentView = content
         refreshUndo()
     }
+
+    /// Pinning drops the bar and shrinks the window to the image; unpinning lays the bar out again.
+    /// The image stays exactly where it is on screen either way.
+    func setPinned(_ pinned: Bool) {
+        guard pinned != isPinned else { return }
+        canvas.endTextEditing()
+        if pinned { setTool(.select) }
+        let imageOnScreen = imageFrame
+        isPinned = pinned
+
+        if pinned {
+            setFrame(imageOnScreen, display: false)
+            canvas.frame = CGRect(origin: .zero, size: imageOnScreen.size)
+        } else {
+            let visible = (screen ?? NSScreen.main)?.visibleFrame ?? imageOnScreen
+            let layout = Self.layout(imageFrame: imageOnScreen, barSize: bar.fittingSize, visible: visible)
+            setFrame(layout.window, display: false)
+            canvas.frame = layout.image
+            bar.frame = layout.bar
+        }
+        bar.isHidden = pinned
+        imageRect = canvas.frame
+        feedback.frame = canvas.frame
+        unpinButton.isHidden = true
+        let side: CGFloat = 24
+        unpinButton.frame = CGRect(x: canvas.frame.maxX - side - 6, y: canvas.frame.maxY - side - 6, width: side, height: side)
+        canvas.menu = pinned ? pinnedMenu() : nil
+        display()
+    }
+
+    @objc private func unpin() {
+        setPinned(false)
+    }
+
+    /// Right-click menu while pinned, since the bar is hidden.
+    private func pinnedMenu() -> NSMenu {
+        let menu = NSMenu()
+        let items: [(String, Selector)] = [
+            ("取消钉住", #selector(unpin)),
+            ("编辑模式", #selector(editFromMenu)),
+            ("复制", #selector(copyFromMenu)),
+            ("保存", #selector(saveFromMenu)),
+        ]
+        for (title, action) in items {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let close = NSMenuItem(title: "关闭", action: #selector(closeFromMenu), keyEquivalent: "")
+        close.target = self
+        menu.addItem(close)
+        return menu
+    }
+
+    @objc private func editFromMenu() { edit() }
+    @objc private func copyFromMenu() { copyImage() }
+    @objc private func saveFromMenu() { saveImage() }
+    @objc private func closeFromMenu() { close() }
 
     override var canBecomeKey: Bool { true }
 
@@ -160,6 +237,7 @@ private final class ActionBar: NSVisualEffectView {
     /// `.select` means no tool: dragging moves the image.
     var onTool: ((EditorTool) -> Void)?
     var onUndo: (() -> Void)?
+    var onPin: (() -> Void)?
     var onEdit: (() -> Void)?
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
@@ -193,6 +271,7 @@ private final class ActionBar: NSVisualEffectView {
             toolControl,
             undoButton,
             divider(),
+            button("钉住", symbol: "pin", tip: "钉在屏幕上：隐藏操作栏，只留图片，可拖动", action: #selector(pin)),
             button("编辑模式", symbol: "slider.horizontal.3", tip: "更多编辑：颜色、粗细、裁剪等（双击图片）", action: #selector(edit)),
             button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
             button("保存", symbol: "square.and.arrow.down", tip: "保存到“图片/PixSnap”", action: #selector(save)),
@@ -258,10 +337,26 @@ private final class ActionBar: NSVisualEffectView {
     }
 
     @objc private func undo() { onUndo?() }
+    @objc private func pin() { onPin?() }
     @objc private func edit() { onEdit?() }
     @objc private func copyImage() { onCopy?() }
     @objc private func save() { onSave?() }
     @objc private func closeCapture() { onClose?() }
+}
+
+/// Reports when the mouse enters or leaves the window.
+@MainActor
+private final class HoverView: NSView {
+    var onHoverChanged: ((Bool) -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHoverChanged?(true) }
+    override func mouseExited(with event: NSEvent) { onHoverChanged?(false) }
 }
 
 /// A short message ("已复制") that fades in over the image and out again.

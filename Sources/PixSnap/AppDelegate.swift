@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             coordinator.openEditor(forImageAt: URL(fileURLWithPath: arguments[flag + 1]))
         }
         if let flag = arguments.firstIndex(of: "--pin"), arguments.indices.contains(flag + 1) {
-            coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]))
+            coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]), pinned: arguments.contains("--pinned"))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
         if let flag = arguments.firstIndex(of: "--overlay"), arguments.indices.contains(flag + 1) {
