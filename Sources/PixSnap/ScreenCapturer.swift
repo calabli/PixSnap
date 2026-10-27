@@ -1,5 +1,5 @@
 import AppKit
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 
 /// One display captured at full resolution right before the selection overlay appears,
 /// so the user selects from a still image instead of a moving screen.
@@ -22,29 +22,107 @@ struct Capture {
     }
 }
 
+/// Captures every display with ScreenCaptureKit. Fetching the list of displays takes ~25 ms, so it's
+/// cached: fetched at launch, refreshed in the background after each capture and when displays change.
 @MainActor
-enum ScreenCapturer {
-    static func captureAllScreens() async throws -> [FrozenScreen] {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        let ownApp = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+final class ScreenCapturer {
+    static let shared = ScreenCapturer()
 
-        var frozen: [FrozenScreen] = []
-        for screen in NSScreen.screens {
-            guard let displayID = screen.displayID,
-                  let display = content.displays.first(where: { $0.displayID == displayID }) else { continue }
+    private var cachedContent: SCShareableContent?
+    /// PixSnap itself, used to keep its own windows (pinned captures) out of screenshots. The display
+    /// list only names apps that have windows on screen, so this is remembered once it's been seen.
+    private var ownApplication: SCRunningApplication?
+    private var screenObserver: NSObjectProtocol?
 
-            let filter = SCContentFilter(display: display, excludingApplications: ownApp, exceptingWindows: [])
-            let configuration = SCStreamConfiguration()
-            let scale = screen.backingScaleFactor
-            configuration.width = Int(CGFloat(display.width) * scale)
-            configuration.height = Int(CGFloat(display.height) * scale)
-            configuration.showsCursor = false
-            configuration.captureResolution = .best
-
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-            frozen.append(FrozenScreen(screen: screen, image: image))
+    private init() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshInBackground() }
         }
-        return frozen
+    }
+
+    /// Loads the display list and runs one tiny capture so the first real capture isn't slowed by
+    /// ScreenCaptureKit starting up.
+    func warmUp() async {
+        guard CGPreflightScreenCaptureAccess(), let content = try? await freshContent(),
+              let display = content.displays.first else { return }
+        let configuration = SCStreamConfiguration()
+        configuration.width = 16
+        configuration.height = 16
+        _ = try? await SCScreenshotManager.captureImage(
+            contentFilter: SCContentFilter(display: display, excludingWindows: []), configuration: configuration
+        )
+    }
+
+    /// Captures every display, the one under the cursor first, calling `onScreen` as each image arrives
+    /// so its overlay can appear without waiting for the others.
+    /// `hasOwnWindowsOnScreen`: PixSnap windows are visible and must be left out of the images.
+    func captureScreens(
+        hasOwnWindowsOnScreen: Bool,
+        timing: CaptureTiming,
+        onScreen: (FrozenScreen) async -> Void
+    ) async throws {
+        var content = try await contentForCapture()
+        let missingDisplay = NSScreen.screens.contains { screen in !content.displays.contains { $0.displayID == screen.displayID } }
+        if missingDisplay || (hasOwnWindowsOnScreen && ownApplication == nil) {
+            content = try await freshContent()
+        }
+        timing.mark("屏幕信息")
+
+        let excluded = ownApplication.map { [$0] } ?? []
+        let mouse = NSEvent.mouseLocation
+        let screens = NSScreen.screens.sorted { first, _ in NSMouseInRect(mouse, first.frame, false) }
+        let jobs: [(screen: NSScreen, filter: SCContentFilter, configuration: SCStreamConfiguration)] =
+            screens.compactMap { screen in
+                guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else { return nil }
+                let configuration = SCStreamConfiguration()
+                let scale = screen.backingScaleFactor
+                configuration.width = Int(CGFloat(display.width) * scale)
+                configuration.height = Int(CGFloat(display.height) * scale)
+                configuration.showsCursor = false
+                configuration.captureResolution = .best
+                let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+                return (screen, filter, configuration)
+            }
+
+        // ScreenCaptureKit works through requests one at a time in its own order, so the screen under
+        // the cursor goes alone and first; the others are requested together once it's on screen.
+        if let first = jobs.first {
+            let image = try await SCScreenshotManager.captureImage(contentFilter: first.filter, configuration: first.configuration)
+            timing.mark("截取屏幕1")
+            await onScreen(FrozenScreen(screen: first.screen, image: image))
+        }
+        try await withThrowingTaskGroup(of: (Int, CGImage).self) { group in
+            for (index, job) in jobs.enumerated().dropFirst() {
+                let filter = job.filter, configuration = job.configuration
+                group.addTask {
+                    (index, try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration))
+                }
+            }
+            for try await (index, image) in group {
+                timing.mark("截取屏幕\(index + 1)")
+                await onScreen(FrozenScreen(screen: jobs[index].screen, image: image))
+            }
+        }
+        refreshInBackground()
+    }
+
+    private func contentForCapture() async throws -> SCShareableContent {
+        if let cachedContent { return cachedContent }
+        return try await freshContent()
+    }
+
+    private func freshContent() async throws -> SCShareableContent {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        cachedContent = content
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        if let own = content.applications.first(where: { $0.processID == ownPID }) { ownApplication = own }
+        return content
+    }
+
+    private func refreshInBackground() {
+        Task { _ = try? await freshContent() }
     }
 }
 

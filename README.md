@@ -35,7 +35,19 @@ swift test
 - 图下方一排按钮：常用标注（矩形、箭头、文字、马赛克、序号）和撤销，直接画在浮动的图上；再点一次当前工具回到拖动模式；然后是编辑模式、复制（PNG + TIFF 到剪贴板）、保存到“图片/PixSnap”、关闭；双击图片进入编辑模式；Esc 先取消工具，再按一次关闭
 - 编辑模式（完整编辑器）：标注会带过去并保持可编辑；复制、保存后不关闭；点“退出编辑”（或 Esc、回车、⌘W、红色按钮）后截图连同标注继续浮在屏幕上
 - 编辑模式工具：选择/移动（V）、矩形（R）、箭头（A）、文字（T）、序号（N）、马赛克（M）、裁剪（C）；6 种颜色、3 档粗细；选中后改颜色和粗细、Delete 删除、双击文字重新编辑；⌘Z / ⇧⌘Z 撤销重做，⌘C 复制，⌘S 保存
-- 开发调试：`PixSnap --edit <图片路径>` 用编辑器打开图片，`PixSnap --pin <图片路径>` 把图片浮动在屏幕中间，`PixSnap --settings` 启动后直接打开设置
+- 开发调试：`PixSnap --edit <图片路径>` 用编辑器打开图片，`PixSnap --pin <图片路径>` 把图片浮动在屏幕中间，`PixSnap --settings` 启动后直接打开设置，`PixSnap --overlay <图片路径>` 在图片上显示选区界面
+
+## 性能
+
+目标：按下快捷键到光标所在屏幕出现选区界面 ≤ 100ms。每次截图的各阶段耗时会写进系统日志（子系统 `com.pixsnap.PixSnap`，类别 `performance`）。
+
+测量（release 版，连续截图 20 次，结果写入文件后自动退出；期间屏幕会闪几下，不保存任何截图）：
+
+```bash
+scripts/build-app.sh release && open build/PixSnap.app --args --benchmark-capture 20 --benchmark-output /tmp/pixsnap-benchmark.txt
+```
+
+2026-10-27 在双屏 Mac 上：优化前热启动中位数 146ms、p90 155ms、首次 223ms；优化后中位数 63ms、p90 77ms、首次 92ms。
 
 ## 代码结构
 

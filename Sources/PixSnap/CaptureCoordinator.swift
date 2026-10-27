@@ -6,6 +6,8 @@ import PixSnapCore
 final class CaptureCoordinator {
     private var overlays: [SelectionWindow] = []
     private var isCapturing = false
+    /// Increases with every capture, so screens that finish after their capture ended are ignored.
+    private var sessionID = 0
     private var previousApp: NSRunningApplication?
     private var floatingCaptures: [FloatingCaptureWindow] = []
     private var editors: [EditorWindowController] = []
@@ -47,6 +49,21 @@ final class CaptureCoordinator {
                                 width: size.width, height: size.height), on: screen)
     }
 
+    /// Development: shows the selection overlay over an image file instead of the live screen.
+    func showOverlay(forImageAt url: URL) {
+        guard !isCapturing, let capture = Self.loadCapture(at: url),
+              let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) else { return }
+        isCapturing = true
+        sessionID += 1
+        let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        showOverlay(
+            for: FrozenScreen(screen: screen, image: capture.image),
+            windowFrames: WindowDetector.visibleWindowFrames(primaryScreenHeight: primaryHeight),
+            isFirst: true,
+            timing: CaptureTiming()
+        )
+    }
+
     /// Loads an image file, using its DPI to recover the Retina scale.
     private static func loadCapture(at url: URL) -> Capture? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
@@ -59,20 +76,46 @@ final class CaptureCoordinator {
         return Capture(image: image, scale: max(1, dpi / 72))
     }
 
+    /// Called with the timings once the overlay has drawn its first frame.
+    var onOverlayDrawn: ((CaptureTiming) -> Void)?
+
     func startCapture() {
+        startCapture(timing: CaptureTiming())
+    }
+
+    func startCapture(timing: CaptureTiming) {
         guard !isCapturing else { return }
         guard PermissionGuide.ensureScreenCapture() else { return }
         isCapturing = true
+        timing.mark("权限")
 
         let front = NSWorkspace.shared.frontmostApplication
         previousApp = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
-        let windowFrames = WindowDetector.visibleWindowFrames()
+        // The window list is read on another thread while the screens are being captured.
+        let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        let windowList = Task.detached(priority: .userInitiated) {
+            WindowDetector.visibleWindowFrames(primaryScreenHeight: primaryHeight)
+        }
+
+        sessionID += 1
+        let session = sessionID
+        // The status bar item is always there; any other visible window (a pinned capture, the
+        // editor, Settings) has to be kept out of the screenshot.
+        let hasOwnWindowsOnScreen = NSApp.windows.contains { $0.isVisible && !$0.className.contains("StatusBar") }
 
         Task {
+            var shownAny = false
             do {
-                let frozen = try await ScreenCapturer.captureAllScreens()
-                showOverlays(for: frozen, windowFrames: windowFrames)
+                try await ScreenCapturer.shared.captureScreens(hasOwnWindowsOnScreen: hasOwnWindowsOnScreen, timing: timing) { frozen in
+                    let windowFrames = await windowList.value
+                    // Esc, a finished selection or a newer capture: drop screens that arrive late.
+                    guard isCapturing, sessionID == session else { return }
+                    showOverlay(for: frozen, windowFrames: windowFrames, isFirst: !shownAny, timing: timing)
+                    shownAny = true
+                }
+                if !shownAny, sessionID == session { isCapturing = false }
             } catch {
+                guard !shownAny, sessionID == session else { return }
                 isCapturing = false
                 NSLog("PixSnap capture failed: \(error)")
                 PermissionGuide.showScreenCaptureAlert()
@@ -80,25 +123,37 @@ final class CaptureCoordinator {
         }
     }
 
-    private func showOverlays(for frozenScreens: [FrozenScreen], windowFrames: [CGRect]) {
-        guard !frozenScreens.isEmpty else {
-            isCapturing = false
-            return
+    /// Shows the overlay for one screen as soon as its image is ready; the screen under the cursor is
+    /// captured first, so that's normally the first to appear.
+    private func showOverlay(for frozen: FrozenScreen, windowFrames: [CGRect], isFirst: Bool, timing: CaptureTiming) {
+        if isFirst { NSApp.activate() }
+        let window = SelectionWindow(frozen: frozen, windowFrames: windowFrames)
+        window.selectionView.onSelect = { [weak self] rect in self?.finish(frozen: frozen, viewRect: rect) }
+        window.selectionView.onCancel = { [weak self] in self?.endSession() }
+        window.orderFrontRegardless()
+        overlays.append(window)
+
+        let isUnderMouse = NSMouseInRect(NSEvent.mouseLocation, frozen.screen.frame, false)
+        // Keyboard focus goes to the screen under the cursor so Esc works right away.
+        if isUnderMouse {
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(window.selectionView)
         }
-        NSApp.activate()
-        let mouse = NSEvent.mouseLocation
-        for frozen in frozenScreens {
-            let window = SelectionWindow(frozen: frozen, windowFrames: windowFrames)
-            window.selectionView.onSelect = { [weak self] rect in self?.finish(frozen: frozen, viewRect: rect) }
-            window.selectionView.onCancel = { [weak self] in self?.endSession() }
-            window.orderFrontRegardless()
-            overlays.append(window)
-            // Keyboard focus goes to the screen under the cursor so Esc works right away.
-            if NSMouseInRect(mouse, frozen.screen.frame, false) {
-                window.makeKeyAndOrderFront(nil)
-                window.makeFirstResponder(window.selectionView)
-            }
+
+        // Draw now and hand the frame to the window server instead of waiting for the next run loop pass.
+        window.displayIfNeeded()
+        CATransaction.flush()
+        if isUnderMouse {
+            timing.mark(CaptureTiming.firstFrameStage)
+            timing.log()
+            onOverlayDrawn?(timing)
         }
+    }
+
+    /// Ends the selection without capturing, as Esc does.
+    func cancelSelection() {
+        guard isCapturing else { return }
+        endSession()
     }
 
     private func finish(frozen: FrozenScreen, viewRect: CGRect) {

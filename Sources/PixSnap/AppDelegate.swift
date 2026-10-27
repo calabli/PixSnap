@@ -7,9 +7,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let coordinator = CaptureCoordinator()
     private lazy var captureShortcut = CaptureShortcutService { [weak self] in self?.coordinator.startCapture() }
     private lazy var settingsWindow = SettingsWindowController(shortcutService: captureShortcut)
+    private var benchmark: CaptureBenchmark?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
+        Task { await ScreenCapturer.shared.warmUp() }
 
         captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItem() }
         if !captureShortcut.start() {
@@ -30,6 +32,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
+        if let flag = arguments.firstIndex(of: "--overlay"), arguments.indices.contains(flag + 1) {
+            coordinator.showOverlay(forImageAt: URL(fileURLWithPath: arguments[flag + 1]))
+        }
+        if let flag = arguments.firstIndex(of: "--benchmark-capture") {
+            let runs = arguments.indices.contains(flag + 1) ? Int(arguments[flag + 1]) ?? 10 : 10
+            let output = arguments.firstIndex(of: "--benchmark-output")
+                .flatMap { arguments.indices.contains($0 + 1) ? URL(fileURLWithPath: arguments[$0 + 1]) : nil }
+                ?? FileManager.default.temporaryDirectory.appendingPathComponent("pixsnap-benchmark.txt")
+            benchmark = CaptureBenchmark(coordinator: coordinator, runs: runs, outputURL: output)
+            benchmark?.start()
+        }
     }
 
     private func setUpStatusItem() {
