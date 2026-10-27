@@ -138,6 +138,8 @@ struct SettingsView: View {
                 Text("会删除 \(history.count) 张截图，包括收藏的，无法恢复。已经保存到“保存位置”的文件不受影响。")
             }
 
+            RopeStyleSection(style: $settings.ropeStyle)
+
             Section("通用") {
                 Toggle("登录时打开 PixSnap", isOn: Binding(
                     get: { settings.launchesAtLogin },

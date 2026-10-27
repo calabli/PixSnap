@@ -39,6 +39,11 @@ final class AppSettings {
         didSet { defaults.set(pullsHistoryFromNotch, forKey: Keys.pullsHistoryFromNotch) }
     }
 
+    /// How the clothesline ropes look.
+    var ropeStyle: RopeStyle {
+        didSet { if let data = try? JSONEncoder().encode(ropeStyle) { defaults.set(data, forKey: Keys.ropeStyle) } }
+    }
+
     private(set) var launchAtLoginStatus: SMAppService.Status
 
     static let defaultSaveFolder = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]
@@ -54,6 +59,7 @@ final class AppSettings {
         /// 0 means forever.
         static let historyRetentionDays = "historyRetentionDays"
         static let pullsHistoryFromNotch = "pullsHistoryFromNotch"
+        static let ropeStyle = "ropeStyle"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -67,6 +73,8 @@ final class AppSettings {
         let days = defaults.object(forKey: Keys.historyRetentionDays) as? Int ?? 30
         historyRetentionDays = days > 0 ? days : nil
         pullsHistoryFromNotch = defaults.object(forKey: Keys.pullsHistoryFromNotch) as? Bool ?? true
+        ropeStyle = defaults.data(forKey: Keys.ropeStyle)
+            .flatMap { try? JSONDecoder().decode(RopeStyle.self, from: $0) } ?? .default
         launchAtLoginStatus = SMAppService.mainApp.status
     }
 

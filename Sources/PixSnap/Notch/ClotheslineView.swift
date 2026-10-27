@@ -45,7 +45,8 @@ final class ClotheslineView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     /// Lays out `days`; `emptyMessage` shows when there's nothing to hang.
-    func show(_ days: [HistoryGrouping.Day], thumbnails: (HistoryEntry) -> NSImage?, emptyMessage: String) {
+    func show(_ days: [HistoryGrouping.Day], style: RopeStyle, thumbnails: (HistoryEntry) -> NSImage?, emptyMessage: String) {
+        ropes.style = style
         photos.forEach { $0.removeFromSuperview() }
         photos = []
         ropes.lines = []
@@ -66,19 +67,20 @@ final class ClotheslineView: NSView {
 
         for (row, day) in days.enumerated() {
             let ropeY = bounds.maxY - Self.topPadding - CGFloat(row) * Self.rowHeight - 24
-            ropes.lines.append(RopeView.Line(from: CGPoint(x: ropeStart, y: ropeY), to: CGPoint(x: ropeEnd, y: ropeY), sag: Self.ropeSag))
+            let line = RopeView.Line(from: CGPoint(x: ropeStart, y: ropeY), to: CGPoint(x: ropeEnd, y: ropeY), sag: Self.ropeSag)
+            ropes.lines.append(line)
 
             // The day sits just above the rope, near its left end.
             let label = DayLabel(text: day.title)
-            label.setFrameOrigin(CGPoint(x: 24, y: ropeY + 4))
+            label.setFrameOrigin(CGPoint(x: 24, y: ropeY + RopeView.clearance(for: style) + 4))
             addSubview(label)
 
             // The newest captures that fit, spread evenly along the rope.
             let shown = day.entries.suffix(capacity)
             for (index, entry) in shown.enumerated() {
                 let t = CGFloat(index + 1) / CGFloat(shown.count + 1)
-                let x = ropeStart + t * (ropeEnd - ropeStart)
-                let y = ropeY - Self.ropeSag * 4 * t * (1 - t)
+                let x = line.point(at: t).x
+                let y = line.point(at: t).y
                 let photo = PhotoView(
                     entry: entry,
                     thumbnail: thumbnails(entry),
@@ -97,59 +99,6 @@ final class ClotheslineView: NSView {
     func playDropAnimation() {
         for (index, photo) in photos.enumerated() {
             photo.drop(after: Double(index) * 0.03)
-        }
-    }
-}
-
-/// The ropes, drawn as layers under the photos.
-@MainActor
-private final class RopeView: NSView {
-    struct Line {
-        let from: CGPoint
-        let to: CGPoint
-        let sag: CGFloat
-    }
-
-    var lines: [Line] = [] {
-        didSet { rebuild() }
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    private func rebuild() {
-        layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
-        for line in lines {
-            let path = CGMutablePath()
-            path.move(to: line.from)
-            // A quadratic curve whose midpoint dips by `sag`.
-            path.addQuadCurve(to: line.to, control: CGPoint(x: (line.from.x + line.to.x) / 2, y: line.from.y - line.sag * 2))
-            // A light line with a dark halo, readable over light and dark screens alike.
-            let rope = CAShapeLayer()
-            rope.path = path
-            rope.fillColor = nil
-            rope.strokeColor = NSColor(white: 0.96, alpha: 0.95).cgColor
-            rope.lineWidth = 1.5
-            rope.shadowColor = NSColor.black.cgColor
-            rope.shadowOpacity = 0.6
-            rope.shadowRadius = 1.5
-            rope.shadowOffset = .zero
-            layer?.addSublayer(rope)
-            for end in [line.from, line.to] {
-                let peg = CAShapeLayer()
-                peg.path = CGPath(ellipseIn: CGRect(x: end.x - 3.5, y: end.y - 3.5, width: 7, height: 7), transform: nil)
-                peg.fillColor = NSColor(white: 0.96, alpha: 1).cgColor
-                peg.strokeColor = NSColor.black.withAlphaComponent(0.45).cgColor
-                peg.lineWidth = 1
-                layer?.addSublayer(peg)
-            }
         }
     }
 }
@@ -289,18 +238,5 @@ private final class PhotoView: NSView {
         guard let start = mouseDownPoint,
               hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y) < 4 else { return }
         onPick?(entry)
-    }
-}
-
-/// Repeatable pseudo-random numbers, so photos keep the same tilt every time the panel opens.
-private struct SeededRandom {
-    private var state: UInt64
-
-    init(seed: UInt64) { state = seed }
-
-    mutating func next(in range: ClosedRange<Double>) -> Double {
-        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-        let unit = Double(state >> 11) / Double(1 << 53)
-        return range.lowerBound + unit * (range.upperBound - range.lowerBound)
     }
 }

@@ -155,7 +155,7 @@ final class NotchWindow: NSPanel {
         handle.frame = handleOnScreen.offsetBy(dx: -openFrame.minX, dy: -openFrame.minY)
 
         clothesline.frame = CGRect(x: 0, y: 0, width: openFrame.width, height: height)
-        clothesline.show(loaded.days, thumbnails: { HistoryLibrary.shared.thumbnail(for: $0) }, emptyMessage: loaded.emptyMessage)
+        clothesline.show(loaded.days, style: AppSettings.shared.ropeStyle, thumbnails: { HistoryLibrary.shared.thumbnail(for: $0) }, emptyMessage: loaded.emptyMessage)
     }
 
     /// 0: the lines are tucked above the top of the screen; 1: hanging in place under the notch.
