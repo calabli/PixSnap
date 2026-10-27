@@ -11,6 +11,28 @@ final class CaptureCoordinator {
     private var previousApp: NSRunningApplication?
     private var floatingCaptures: [FloatingCaptureWindow] = []
     private var editors: [EditorWindowController] = []
+    /// Display frames when the current capture started.
+    private var captureScreenFrames: [CGRect] = []
+    private var screenObserver: NSObjectProtocol?
+
+    init() {
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.screensDidChange() }
+        }
+    }
+
+    /// A display was added, removed or rearranged. A selection in progress no longer matches the
+    /// screens, so it's cancelled; pinned captures left where a display used to be come back.
+    private func screensDidChange() {
+        let frames = NSScreen.screens.map(\.frame)
+        if isCapturing, frames != captureScreenFrames { cancelSelection() }
+        guard let main = NSScreen.main ?? NSScreen.screens.first else { return }
+        for window in floatingCaptures where !ScreenGeometry.isReachable(window.frame, on: frames) {
+            window.setFrame(ScreenGeometry.centered(window.frame.size, in: main.visibleFrame), display: true)
+        }
+    }
 
     /// Opens edit mode. When it ends, the capture floats again with its annotations:
     /// at `returnFrame`'s top-left corner if given, otherwise in the middle of the screen.
@@ -40,13 +62,13 @@ final class CaptureCoordinator {
         openEditor(for: capture, on: screen)
     }
 
-    /// Pins an image file in the middle of the main screen.
+    /// Pins an image file in the middle of the screen under the cursor.
     func pinImage(at url: URL) {
-        guard let capture = Self.loadCapture(at: url), let screen = NSScreen.main else { return }
-        let size = capture.pointSize
-        let visible = screen.visibleFrame
-        pin(capture, at: CGRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2,
-                                width: size.width, height: size.height), on: screen)
+        let mouse = NSEvent.mouseLocation
+        guard let capture = Self.loadCapture(at: url),
+              let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main
+        else { return }
+        pin(capture, at: ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame), on: screen)
     }
 
     /// Development: shows the selection overlay over an image file instead of the live screen.
@@ -54,6 +76,7 @@ final class CaptureCoordinator {
         guard !isCapturing, let capture = Self.loadCapture(at: url),
               let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) else { return }
         isCapturing = true
+        captureScreenFrames = NSScreen.screens.map(\.frame)
         sessionID += 1
         let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
         showOverlay(
@@ -87,6 +110,7 @@ final class CaptureCoordinator {
         guard !isCapturing else { return }
         guard PermissionGuide.ensureScreenCapture() else { return }
         isCapturing = true
+        captureScreenFrames = NSScreen.screens.map(\.frame)
         timing.mark("权限")
 
         let front = NSWorkspace.shared.frontmostApplication

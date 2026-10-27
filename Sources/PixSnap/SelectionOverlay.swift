@@ -15,7 +15,8 @@ final class SelectionWindow: NSWindow {
             image: frozen.image,
             // Convert global window frames into this screen's local coordinates.
             windowRects: windowFrames.map { $0.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY) },
-            initialMouse: NSEvent.mouseLocation.applying(.init(translationX: -screenFrame.minX, y: -screenFrame.minY))
+            initialMouse: NSEvent.mouseLocation.applying(.init(translationX: -screenFrame.minX, y: -screenFrame.minY)),
+            topInset: frozen.screen.safeAreaInsets.top
         )
         super.init(contentRect: screenFrame, styleMask: .borderless, backing: .buffered, defer: false)
         level = .screenSaver
@@ -66,8 +67,12 @@ final class SelectionView: NSView {
     private let crosshairY = CALayer()
     private let sizeLabel = SizeLabelView()
     private let magnifier: MagnifierView
+    /// Height of the camera notch at the top of the screen (0 without one); the size label and the
+    /// magnifier stay below it so they're never hidden behind it.
+    private let topInset: CGFloat
 
-    init(frame: CGRect, image: CGImage, windowRects: [CGRect], initialMouse: CGPoint) {
+    init(frame: CGRect, image: CGImage, windowRects: [CGRect], initialMouse: CGPoint, topInset: CGFloat) {
+        self.topInset = topInset
         self.frozenImage = image
         self.imageSize = CGSize(width: image.width, height: image.height)
         self.windowRects = windowRects
@@ -229,7 +234,7 @@ final class SelectionView: NSView {
 
         magnifier.isHidden = !mouseInside
         if mouseInside {
-            magnifier.setFrameOrigin(MagnifierRenderer.origin(forCursor: mouse, in: bounds))
+            magnifier.setFrameOrigin(MagnifierRenderer.origin(forCursor: mouse, in: labelBounds))
             magnifier.pixel = pixelUnderMouse
         }
     }
@@ -240,10 +245,16 @@ final class SelectionView: NSView {
         let size = sizeLabel.fittingSize
 
         // Above the selection's top-left corner; inside it when there's no room above.
+        let area = labelBounds
         var origin = CGPoint(x: rect.minX, y: rect.maxY + 6)
-        if origin.y + size.height > bounds.maxY { origin.y = rect.maxY - size.height - 6 }
-        origin.x = min(max(origin.x, bounds.minX), bounds.maxX - size.width)
+        if origin.y + size.height > area.maxY { origin.y = min(rect.maxY, area.maxY) - size.height - 6 }
+        origin.x = min(max(origin.x, area.minX), area.maxX - size.width)
         sizeLabel.frame = CGRect(origin: origin, size: size)
+    }
+
+    /// Where the size label and magnifier may go: the screen minus the notch strip at the top.
+    private var labelBounds: CGRect {
+        CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: bounds.height - topInset)
     }
 }
 

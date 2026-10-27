@@ -1,4 +1,5 @@
 import AppKit
+import PixSnapCore
 @preconcurrency import ScreenCaptureKit
 
 /// One display captured at full resolution right before the selection overlay appears,
@@ -71,8 +72,9 @@ final class ScreenCapturer {
         timing.mark("屏幕信息")
 
         let excluded = ownApplication.map { [$0] } ?? []
-        let mouse = NSEvent.mouseLocation
-        let screens = NSScreen.screens.sorted { first, _ in NSMouseInRect(mouse, first.frame, false) }
+        let allScreens = NSScreen.screens
+        let screens = ScreenGeometry.indicesStartingWithScreen(under: NSEvent.mouseLocation, in: allScreens.map(\.frame))
+            .map { allScreens[$0] }
         let jobs: [(screen: NSScreen, filter: SCContentFilter, configuration: SCStreamConfiguration)] =
             screens.compactMap { screen in
                 guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else { return nil }

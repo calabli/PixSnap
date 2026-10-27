@@ -1,4 +1,5 @@
 import AppKit
+import PixSnapCore
 
 /// Lists the frames of visible app windows so the overlay can highlight the one under the cursor.
 enum WindowDetector {
@@ -16,8 +17,7 @@ enum WindowDetector {
                   let bounds = info[kCGWindowBounds as String] as? NSDictionary,
                   let frame = CGRect(dictionaryRepresentation: bounds),
                   frame.width > 40, frame.height > 40 else { return nil }
-            // CGWindow bounds use a top-left origin relative to the primary display.
-            return CGRect(x: frame.minX, y: primaryScreenHeight - frame.maxY, width: frame.width, height: frame.height)
+            return ScreenGeometry.appKitRect(fromCGRect: frame, primaryScreenHeight: primaryScreenHeight)
         }
     }
 }

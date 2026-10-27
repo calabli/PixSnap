@@ -31,11 +31,14 @@ public enum MagnifierRenderer {
     }
 
     /// Bottom-left corner for the magnifier: below and to the right of the cursor, moved to the
-    /// other side of the cursor when it would leave `bounds` (bottom-left-origin coordinates).
+    /// other side of the cursor when it would leave `bounds` (bottom-left-origin coordinates),
+    /// and always kept fully inside `bounds`.
     public static func origin(forCursor cursor: CGPoint, in bounds: CGRect) -> CGPoint {
         var origin = CGPoint(x: cursor.x + cursorGap, y: cursor.y - cursorGap - size.height)
         if origin.x + size.width > bounds.maxX { origin.x = cursor.x - cursorGap - size.width }
         if origin.y < bounds.minY { origin.y = cursor.y + cursorGap }
+        origin.x = min(max(origin.x, bounds.minX), bounds.maxX - size.width)
+        origin.y = min(max(origin.y, bounds.minY), bounds.maxY - size.height)
         return origin
     }
 

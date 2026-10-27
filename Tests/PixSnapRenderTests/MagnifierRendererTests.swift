@@ -42,6 +42,14 @@ final class MagnifierRendererTests: XCTestCase {
         XCTAssertTrue(screen.contains(CGRect(origin: corner, size: size)))
     }
 
+    func testStaysBelowTheNotchStrip() {
+        // A 1169-point-high screen with a 38-point notch: the allowed area ends at 1131.
+        let belowNotch = CGRect(x: 0, y: 0, width: 1800, height: 1131)
+        let origin = MagnifierRenderer.origin(forCursor: CGPoint(x: 1000, y: 1157), in: belowNotch)
+        XCTAssertLessThanOrEqual(origin.y + MagnifierRenderer.size.height, 1131)
+        XCTAssertGreaterThan(origin.x, 1000)
+    }
+
     /// PIXSNAP_RENDER_INPUT=<png> PIXSNAP_MAGNIFIER_OUTPUT=<png> swift test --filter testWritesVisualSample
     func testWritesVisualSample() throws {
         let environment = ProcessInfo.processInfo.environment

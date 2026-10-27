@@ -30,6 +30,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
         window.delegate = self
+        // Open on the current Space, even over a full-screen app, instead of switching to the desktop.
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.center()
         return window
     }

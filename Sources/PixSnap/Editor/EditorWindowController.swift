@@ -52,6 +52,8 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
         window.title = "标注截图 — \(capture.image.width) × \(capture.image.height)"
         window.isReleasedWhenClosed = false
         window.delegate = self
+        // Open on the current Space, even over a full-screen app, instead of switching to the desktop.
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.contentMinSize = CGSize(width: Self.minimumWidth, height: 320)
         window.contentView = makeContent()
         window.setFrameOrigin(CGPoint(x: visible.midX - window.frame.width / 2, y: visible.midY - window.frame.height / 2))
