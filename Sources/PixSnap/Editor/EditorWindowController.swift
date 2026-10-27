@@ -115,7 +115,7 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
         copyButton.keyEquivalentModifierMask = .command
         copyButton.bezelStyle = .push
         let saveButton = NSButton(title: "保存", target: self, action: #selector(saveImage))
-        saveButton.toolTip = "保存到“图片/PixSnap”（⌘S）"
+        saveButton.toolTip = "保存为 PNG，选择保存位置（⌘S）"
         saveButton.keyEquivalent = "s"
         saveButton.keyEquivalentModifierMask = .command
         saveButton.bezelStyle = .push
@@ -212,11 +212,16 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
 
     @objc private func saveImage() {
         guard let result = renderedCapture() else { return }
-        do {
-            _ = try ImageExporter.save(result)
-            feedback.show("已保存到“图片/PixSnap”")
-        } catch {
-            NSAlert(error: error).beginSheetModal(for: window)
+        ImageExporter.saveAsking(result) { [weak self] outcome in
+            guard let self else { return }
+            switch outcome {
+            case .success(let url):
+                feedback.show("已保存到“\(url.deletingLastPathComponent().lastPathComponent)”")
+            case .failure(let error):
+                NSAlert(error: error).beginSheetModal(for: window)
+            case nil:
+                break
+            }
         }
     }
 

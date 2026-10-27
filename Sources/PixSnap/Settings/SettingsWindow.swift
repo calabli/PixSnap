@@ -95,7 +95,9 @@ struct SettingsView: View {
 
             Section("截图") {
                 Toggle("截图后自动复制到剪贴板", isOn: $settings.copiesAfterCapture)
-                LabeledContent("保存位置") {
+                Toggle("点“保存”时选择保存位置", isOn: $settings.asksWhereToSave)
+                    .help("关闭后，点“保存”直接存进下面的文件夹")
+                LabeledContent(settings.asksWhereToSave ? "默认位置" : "保存位置") {
                     HStack {
                         Text((settings.saveFolder.path as NSString).abbreviatingWithTildeInPath)
                             .lineLimit(1)

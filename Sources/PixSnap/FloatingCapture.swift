@@ -218,12 +218,16 @@ final class FloatingCaptureWindow: NSPanel {
 
     private func saveImage() {
         guard let result = renderedCapture() else { return }
-        do {
-            _ = try ImageExporter.save(result)
-            feedback.show("已保存到“图片/PixSnap”")
-        } catch {
-            feedback.show("保存失败")
-            NSLog("PixSnap save failed: \(error)")
+        ImageExporter.saveAsking(result) { [weak self] outcome in
+            switch outcome {
+            case .success(let url):
+                self?.feedback.show("已保存到“\(url.deletingLastPathComponent().lastPathComponent)”")
+            case .failure(let error):
+                self?.feedback.show("保存失败")
+                NSLog("PixSnap save failed: \(error)")
+            case nil:
+                break
+            }
         }
     }
 
@@ -311,7 +315,7 @@ private final class ActionBar: NSVisualEffectView {
             button("钉住", symbol: "pin", tip: "钉在屏幕上：隐藏操作栏，只留图片，可拖动", action: #selector(pin)),
             button("编辑模式", symbol: "slider.horizontal.3", tip: "更多编辑：颜色、粗细、裁剪等（双击图片）", action: #selector(edit)),
             button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
-            button("保存", symbol: "square.and.arrow.down", tip: "保存到“图片/PixSnap”", action: #selector(save)),
+            button("保存", symbol: "square.and.arrow.down", tip: "保存为 PNG，选择保存位置", action: #selector(save)),
             button("关闭", symbol: "xmark", tip: "关闭（Esc）", action: #selector(closeCapture)),
         ]
         let stack = NSStackView(views: views)

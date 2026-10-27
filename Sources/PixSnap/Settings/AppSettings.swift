@@ -22,6 +22,11 @@ final class AppSettings {
         didSet { defaults.set(saveFolder.path, forKey: Keys.saveFolderPath) }
     }
 
+    /// Whether Save asks where to put the file (on by default), or saves straight into `saveFolder`.
+    var asksWhereToSave: Bool {
+        didSet { defaults.set(asksWhereToSave, forKey: Keys.asksWhereToSave) }
+    }
+
     /// Whether every capture is kept in history (on by default).
     var savesHistory: Bool {
         didSet { defaults.set(savesHistory, forKey: Keys.savesHistory) }
@@ -55,6 +60,7 @@ final class AppSettings {
         static let captureShortcut = "captureShortcut"
         static let copiesAfterCapture = "copiesAfterCapture"
         static let saveFolderPath = "saveFolderPath"
+        static let asksWhereToSave = "asksWhereToSave"
         static let savesHistory = "savesHistory"
         /// 0 means forever.
         static let historyRetentionDays = "historyRetentionDays"
@@ -69,6 +75,7 @@ final class AppSettings {
         copiesAfterCapture = defaults.bool(forKey: Keys.copiesAfterCapture)
         saveFolder = defaults.string(forKey: Keys.saveFolderPath)
             .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? Self.defaultSaveFolder
+        asksWhereToSave = defaults.object(forKey: Keys.asksWhereToSave) as? Bool ?? true
         savesHistory = defaults.object(forKey: Keys.savesHistory) as? Bool ?? true
         let days = defaults.object(forKey: Keys.historyRetentionDays) as? Int ?? 30
         historyRetentionDays = days > 0 ? days : nil

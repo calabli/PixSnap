@@ -31,9 +31,41 @@ enum ImageExporter {
         }
     }
 
-    /// Saves into ~/Pictures/PixSnap and returns the new file's URL.
+    /// Saves into the folder chosen in Settings and returns the new file's URL.
     static func save(_ capture: Capture) throws -> URL {
         try write(capture, into: saveFolder)
+    }
+
+    /// Saves the way Settings asks: straight into the save folder, or, by default, through a
+    /// "save to" panel that opens in that folder and remembers the folder picked for next time.
+    /// `completion` gets the file written, or nil if the panel was cancelled.
+    static func saveAsking(_ capture: Capture, completion: @escaping (Result<URL, Error>?) -> Void) {
+        guard AppSettings.shared.asksWhereToSave else {
+            completion(Result { try save(capture) })
+            return
+        }
+        let panel = NSSavePanel()
+        panel.title = "保存截图"
+        panel.prompt = "保存"
+        panel.allowedContentTypes = [.png]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.directoryURL = saveFolder
+        panel.nameFieldStringValue = CaptureFileNamer.uniqueURL(in: saveFolder, for: capture.date).lastPathComponent
+        panel.level = .modalPanel
+        // PixSnap has no Dock icon; without this the panel opens behind the app in front.
+        NSApp.activate()
+        panel.begin { response in
+            MainActor.assumeIsolated {
+                guard response == .OK, let url = panel.url else { return completion(nil) }
+                completion(Result {
+                    guard let png = pngData(for: capture) else { throw CocoaError(.fileWriteUnknown) }
+                    try png.write(to: url, options: .atomic)
+                    AppSettings.shared.saveFolder = url.deletingLastPathComponent()
+                    return url
+                })
+            }
+        }
     }
 
     /// Writes a file into Caches for dragging into other apps.
