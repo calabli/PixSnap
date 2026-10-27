@@ -5,6 +5,9 @@ import SwiftUI
 
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
+    /// Called after the notch toggle changes, so the handles can be shown or removed.
+    var onNotchSettingChange: () -> Void = {}
+
     private let settings: AppSettings
     private let recorder: ShortcutRecorder
     private var window: NSWindow?
@@ -23,7 +26,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> NSWindow {
-        let hosting = NSHostingController(rootView: SettingsView(settings: settings, recorder: recorder))
+        let hosting = NSHostingController(rootView: SettingsView(
+            settings: settings, recorder: recorder, onNotchSettingChange: { [weak self] in self?.onNotchSettingChange() }
+        ))
         hosting.sizingOptions = [.preferredContentSize]
         let window = ClosableWindow(contentViewController: hosting)
         window.title = "PixSnap 设置"
@@ -52,6 +57,8 @@ struct SettingsView: View {
     @State private var loginError: String?
     @State private var confirmingClear = false
     private let history = HistoryLibrary.shared
+    /// Shows or hides the notch handles after the toggle changes.
+    var onNotchSettingChange: () -> Void = {}
 
     /// "85 张 · 42.3 MB"
     private var historyUsage: String {
@@ -103,6 +110,9 @@ struct SettingsView: View {
 
             Section("截图历史") {
                 Toggle("保存截图历史", isOn: $settings.savesHistory)
+                Toggle("从刘海往下拉打开晾衣架", isOn: $settings.pullsHistoryFromNotch)
+                    .help("没有刘海的屏幕顶部中间会有一条小黑条，往下拉也能打开")
+                    .onChange(of: settings.pullsHistoryFromNotch) { onNotchSettingChange() }
                 Picker("保留时长", selection: $settings.historyRetentionDays) {
                     ForEach(AppSettings.historyRetentionChoices, id: \.self) { days in
                         Text(days.map { "\($0) 天" } ?? "永久").tag(days)

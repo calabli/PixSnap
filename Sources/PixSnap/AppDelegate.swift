@@ -11,11 +11,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var captureShortcut = CaptureShortcutService { [weak self] in self?.coordinator.startCapture() }
     private lazy var settingsWindow = SettingsWindowController(shortcutService: captureShortcut)
     private var benchmark: CaptureBenchmark?
+    private lazy var notch = NotchController { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setUpStatusItem()
         Task { await ScreenCapturer.shared.warmUp() }
         HistoryLibrary.shared.cleanUp()
+        notch.rebuild()
+        settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
 
         captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItem() }
         if !captureShortcut.start() {
@@ -36,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]), pinned: arguments.contains("--pinned"))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
+        if arguments.contains("--clothesline") { notch.openOnScreenUnderMouse() }
         if let flag = arguments.firstIndex(of: "--history-add"), arguments.indices.contains(flag + 1) {
             coordinator.addToHistory(imageAt: URL(fileURLWithPath: arguments[flag + 1]))
         }
@@ -65,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recentMenu.delegate = self
         recent.submenu = recentMenu
         menu.addItem(recent)
+        menu.addItem(NSMenuItem(title: "打开晾衣架", action: #selector(openClothesline), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "打开截图文件夹", action: #selector(openSaveFolder), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ","))
@@ -139,6 +144,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             menu.addItem(item)
         }
+    }
+
+    @objc private func openClothesline() {
+        // Let the menu close first, or its click would count as a click outside the panel.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.notch.openOnScreenUnderMouse() }
     }
 
     @objc private func pinRecent(_ sender: NSMenuItem) {

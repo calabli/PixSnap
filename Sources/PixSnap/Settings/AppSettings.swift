@@ -34,6 +34,11 @@ final class AppSettings {
 
     static let historyRetentionChoices: [Int?] = [7, 30, 90, nil]
 
+    /// Whether pulling down from the notch (or the bar at the top of other screens) opens the clothesline.
+    var pullsHistoryFromNotch: Bool {
+        didSet { defaults.set(pullsHistoryFromNotch, forKey: Keys.pullsHistoryFromNotch) }
+    }
+
     private(set) var launchAtLoginStatus: SMAppService.Status
 
     static let defaultSaveFolder = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask)[0]
@@ -48,6 +53,7 @@ final class AppSettings {
         static let savesHistory = "savesHistory"
         /// 0 means forever.
         static let historyRetentionDays = "historyRetentionDays"
+        static let pullsHistoryFromNotch = "pullsHistoryFromNotch"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -60,6 +66,7 @@ final class AppSettings {
         savesHistory = defaults.object(forKey: Keys.savesHistory) as? Bool ?? true
         let days = defaults.object(forKey: Keys.historyRetentionDays) as? Int ?? 30
         historyRetentionDays = days > 0 ? days : nil
+        pullsHistoryFromNotch = defaults.object(forKey: Keys.pullsHistoryFromNotch) as? Bool ?? true
         launchAtLoginStatus = SMAppService.mainApp.status
     }
 
