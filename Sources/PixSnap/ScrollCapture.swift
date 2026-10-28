@@ -3,8 +3,8 @@ import PixSnapCore
 
 /// A long screenshot in progress: the selected region stays outlined with the rest of the screen
 /// dimmed, and while the person scrolls the content inside it (with the mouse or trackpad, in
-/// whatever app it is), the region is captured several times a second and the new rows are
-/// stitched on. A preview beside the region shows the long image growing; Return or 完成 finishes,
+/// whatever app it is, down or up), the region is captured several times a second and the rows
+/// that come into view are stitched on at the bottom or the top. A preview beside the region shows the long image growing; Return or 完成 finishes,
 /// Esc or 取消 gives up.
 ///
 /// PixSnap's own windows are left out of the captures, and the frame and dimming ignore the mouse,
@@ -75,25 +75,32 @@ final class ScrollCaptureSession {
     private func show(_ outcome: ScrollStitcher.Outcome?) {
         let height = Int((CGFloat(stitcher.height) / scale).rounded())
         switch outcome {
-        case .started, .unchanged, nil:
+        case .started, .unchanged, .moved, nil:
             controls.status = stitcher.height > stitcher.frameHeight
-                ? "已拼接 \(height) 点高 · 继续往下滚，或按回车完成"
-                : "在框里往下滚动内容（鼠标滚轮或触控板）"
+                ? "已拼接 \(height) 点高 · 继续上下滚动，或按回车完成"
+                : "在框里上下滚动内容（鼠标滚轮或触控板）"
             controls.isWarning = false
-        case .added:
-            controls.status = "已拼接 \(height) 点高 · 继续往下滚，或按回车完成"
+        case .added, .addedAbove:
+            controls.status = "已拼接 \(height) 点高 · 继续上下滚动，或按回车完成"
             controls.isWarning = false
         case .lost:
-            controls.status = "跟丢了：滚得太快或往上滚了，往回滚一点就能接上"
+            controls.status = "跟丢了：滚得太快了，往回滚一点就能接上"
             controls.isWarning = true
         case .full:
             controls.status = "已经够长了（\(height) 点高），按回车完成"
             controls.isWarning = true
         }
         // Rebuilding the preview image copies the whole long image, so not on every frame.
-        if case .added = outcome, Date().timeIntervalSince(lastPreview) > 0.25 {
+        // The preview shows the end that's growing.
+        let growsAtTop: Bool
+        switch outcome {
+        case .added: growsAtTop = false
+        case .addedAbove: growsAtTop = true
+        default: return
+        }
+        if Date().timeIntervalSince(lastPreview) > 0.25 {
             lastPreview = Date()
-            preview.show(stitcher.image(), scale: scale)
+            preview.show(stitcher.image(), showingTop: growsAtTop)
         }
     }
 
@@ -251,13 +258,17 @@ private final class StitchPreviewWindow: NSPanel {
         alphaValue = 0
     }
 
-    /// Shows the image scaled to the preview's width; when it's taller than the preview, its
-    /// bottom (the part just added) stays in view.
-    func show(_ image: CGImage?, scale: CGFloat) {
+    /// Shows the image scaled to the preview's width; when it's taller than the preview, the end
+    /// just added stays in view.
+    func show(_ image: CGImage?, showingTop: Bool) {
         guard let image else { return }
         let fit = imageLayer.bounds.width / CGFloat(image.width)
         imageLayer.contentsScale = 1 / fit
-        Motion.immediately { imageLayer.contents = image }
+        Motion.immediately {
+            // Layer gravity is in unflipped coordinates: "top" is the image's top row.
+            imageLayer.contentsGravity = showingTop ? .top : .bottom
+            imageLayer.contents = image
+        }
         if alphaValue == 0 { animator().alphaValue = 1 }
     }
 }
@@ -324,7 +335,7 @@ private final class ScrollControlsPanel: NSPanel {
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
         contentView = content
-        status = "在框里往下滚动内容（鼠标滚轮或触控板）"
+        status = "在框里上下滚动内容（鼠标滚轮或触控板）"
     }
 
     override var canBecomeKey: Bool { true }
