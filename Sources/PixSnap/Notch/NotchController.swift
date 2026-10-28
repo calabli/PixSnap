@@ -32,7 +32,7 @@ final class NotchController {
                 safeAreaTop: screen.safeAreaInsets.top
             ) ?? NotchGeometry.standInRect(screenFrame: screen.frame)
             let window = NotchWindow(handle: handle, screenFrame: screen.frame, menuBarHeight: Self.menuBarHeight(on: screen))
-            window.loadDays = { Self.days() }
+            window.loadDays = { Self.days(matching: $0) }
             window.onPick = { [weak self] entry in self?.onPick(entry) }
             window.orderFrontRegardless()
             windows.append(window)
@@ -40,7 +40,8 @@ final class NotchController {
     }
 
     /// Opens the clothesline on the screen under the cursor, without a gesture.
-    func openOnScreenUnderMouse(previewingNewest: Bool = false, openingBasket: Bool = false, throwingNewest: Bool = false) {
+    func openOnScreenUnderMouse(previewingNewest: Bool = false, openingBasket: Bool = false, throwingNewest: Bool = false,
+                                searching: String? = nil) {
         let mouse = NSEvent.mouseLocation
         let screenWindow = windows.first { ScreenGeometry.screen($0.screenFrame, containsMouse: mouse) } ?? windows.first
         if let screenWindow {
@@ -48,12 +49,13 @@ final class NotchController {
             if previewingNewest { screenWindow.previewNewest() }
             if openingBasket { screenWindow.openBasket() }
             if throwingNewest { screenWindow.throwNewest() }
+            if let searching { screenWindow.searchNow(searching) }
         } else {
             // The handles are turned off: open a temporary one on this screen.
             guard let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }
             let window = NotchWindow(handle: NotchGeometry.standInRect(screenFrame: screen.frame, height: 1),
                                      screenFrame: screen.frame, menuBarHeight: Self.menuBarHeight(on: screen))
-            window.loadDays = { Self.days() }
+            window.loadDays = { Self.days(matching: $0) }
             window.onPick = { [weak self] entry in self?.onPick(entry) }
             window.orderFrontRegardless()
             windows.append(window)
@@ -66,13 +68,21 @@ final class NotchController {
         max(0, screen.frame.maxY - screen.visibleFrame.maxY)
     }
 
-    private static func days() -> (days: [HistoryGrouping.Day], emptyMessage: String) {
+    /// The days to hang: the latest captures, or with `query`, the ones whose text or app matches
+    /// (on the most recent days that have any). `found` counts every match.
+    private static func days(matching query: String) -> NotchWindow.Lines {
         let settings = AppSettings.shared
-        let entries = HistoryLibrary.shared.recent(limit: 200)
+        let searching = !query.trimmingCharacters(in: .whitespaces).isEmpty
+        let entries = searching ? HistoryLibrary.shared.search(query, limit: 500) : HistoryLibrary.shared.recent(limit: 200)
         let days = HistoryGrouping.days(entries, now: Date(), limit: ClotheslineView.maximumDays)
-        let empty = settings.savesHistory
-            ? "还没有截图。按 \(settings.captureShortcut.displayString) 截一张，它就会挂在这里。"
-            : "截图历史已在设置中关闭。"
-        return (days, empty)
+        let empty: String
+        if searching {
+            empty = settings.recognizesText ? "没有找到包含“\(query)”的截图。" : "没有找到。截图文字识别已在设置中关闭，只能按应用名搜索。"
+        } else {
+            empty = settings.savesHistory
+                ? "还没有截图。按 \(settings.captureShortcut.displayString) 截一张，它就会挂在这里。"
+                : "截图历史已在设置中关闭。"
+        }
+        return NotchWindow.Lines(days: days, emptyMessage: empty, found: searching ? entries.count : nil)
     }
 }

@@ -117,6 +117,35 @@ public final class HistoryDatabase {
         try query("SELECT \(Self.columns) FROM captures WHERE trashed_at IS NULL ORDER BY created_at DESC LIMIT ?", [.integer(limit)])
     }
 
+    /// Captures on the lines whose recognized text or source app contains every word of `text`
+    /// (case doesn't matter), newest first.
+    public func search(_ text: String, limit: Int) throws -> [HistoryEntry] {
+        let words = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return try recent(limit: limit) }
+        // Each word must appear in the text or the app name; LIKE's wildcards in it are taken literally.
+        let condition = words.map { _ in "(ocr_text LIKE ? ESCAPE '\\' OR source_app_name LIKE ? ESCAPE '\\')" }.joined(separator: " AND ")
+        let values = words.flatMap { word -> [Value] in
+            let pattern = "%" + Self.escapeLike(word) + "%"
+            return [.text(pattern), .text(pattern)]
+        }
+        return try query("SELECT \(Self.columns) FROM captures WHERE trashed_at IS NULL AND \(condition) ORDER BY created_at DESC LIMIT ?",
+                         values + [.integer(limit)])
+    }
+
+    static func escapeLike(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    /// Stores what text recognition found ("" when there was none, so it isn't tried again).
+    public func setRecognizedText(_ text: String, id: UUID) throws {
+        try run("UPDATE captures SET ocr_text = ? WHERE id = ?", [.text(text), .text(id.uuidString)])
+    }
+
+    /// Captures whose text hasn't been recognized yet, newest first.
+    public func idsAwaitingRecognition(limit: Int) throws -> [UUID] {
+        try ids("SELECT id FROM captures WHERE ocr_text IS NULL ORDER BY created_at DESC LIMIT ?", [.integer(limit)])
+    }
+
     /// What's in the laundry basket, most recently thrown first.
     public func basket() throws -> [HistoryEntry] {
         try query("SELECT \(Self.columns) FROM captures WHERE trashed_at IS NOT NULL ORDER BY trashed_at DESC", [])

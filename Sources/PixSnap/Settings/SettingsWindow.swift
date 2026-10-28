@@ -122,6 +122,9 @@ struct SettingsView: View {
 
             Section("截图历史") {
                 Toggle("保存截图历史", isOn: $settings.savesHistory)
+                Toggle("识别截图里的文字，用于搜索", isOn: $settings.recognizesText)
+                    .help("在这台 Mac 上用系统的文字识别（中文和英文），不会上传")
+                    .onChange(of: settings.recognizesText) { if settings.recognizesText { history.recognizeMissingText() } }
                 Toggle("从刘海往下拉打开晾衣架", isOn: $settings.pullsHistoryFromNotch)
                     .help("没有刘海的屏幕顶部中间会有一条小黑条，往下拉也能打开")
                     .onChange(of: settings.pullsHistoryFromNotch) { onNotchSettingChange() }

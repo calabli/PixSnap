@@ -19,15 +19,26 @@ import PixSnapCore
 final class NotchWindow: NSPanel {
     var onPick: ((HistoryEntry) -> Void)?
     /// Supplies the days to hang each time the lines are about to come down.
-    var loadDays: (() -> (days: [HistoryGrouping.Day], emptyMessage: String))?
+    var loadDays: ((String) -> Lines)?
+
+    /// What to hang: the days, what to say when there are none, and while searching, how many
+    /// captures matched.
+    struct Lines {
+        let days: [HistoryGrouping.Day]
+        let emptyMessage: String
+        let found: Int?
+    }
 
     let screenFrame: CGRect
     private let collapsedFrame: CGRect
     private let hoverFrame: CGRect
     /// The window while the lines are out: the whole screen.
     private var openFrame: CGRect
-    /// How far down the lines start: below the notch, or below the menu bar on other screens.
+    /// How far down the lines start: below the notch (or the menu bar on other screens) and the
+    /// search box.
     private let topInset: CGFloat
+    private let search = SearchBox()
+    private var query = ""
 
     private let content = PassthroughContentView()
     private let handle = HandleView()
@@ -66,7 +77,7 @@ final class NotchWindow: NSPanel {
         self.screenFrame = screenFrame
         collapsedFrame = handleRect
         hoverFrame = NotchGeometry.hoverRect(for: handleRect)
-        topInset = max(handleRect.height, menuBarHeight) + 6
+        topInset = max(handleRect.height, menuBarHeight) + 6 + SearchBox.band
         openFrame = handleRect
         clothesline = ClotheslineView(frame: CGRect(x: 0, y: 0, width: screenFrame.width, height: ClotheslineView.Plan.empty.height))
 
@@ -98,6 +109,10 @@ final class NotchWindow: NSPanel {
         content.wantsLayer = true
         content.addSubview(clothesline)
         content.addSubview(basket)
+        search.isHidden = true
+        search.onChange = { [weak self] text in self?.searchChanged(text) }
+        search.onLeave = { [weak self] in self?.makeFirstResponder(nil) }
+        content.addSubview(search)
         content.addSubview(handle)
         contentView = content
     }
@@ -117,7 +132,11 @@ final class NotchWindow: NSPanel {
     override func keyDown(with event: NSEvent) {
         guard case .open = phase else { return super.keyDown(with: event) }
         if event.modifierFlags.contains(.command) {
-            if event.charactersIgnoringModifiers == "z" {
+            if event.charactersIgnoringModifiers == "f" {
+                search.focus()
+            } else if event.charactersIgnoringModifiers == "c", let entry = preview.entry ?? clothesline.hoveredEntry {
+                copyText(of: entry)
+            } else if event.charactersIgnoringModifiers == "z" {
                 hangBackLastThrown()
             } else if event.keyCode == 51, event.modifierFlags.contains(.option), let entry = preview.entry ?? clothesline.hoveredEntry {
                 // ⌥⌘⌫, like the Finder's "delete immediately".
@@ -130,6 +149,8 @@ final class NotchWindow: NSPanel {
         switch event.keyCode {
         case 51, 117: // Delete, Forward Delete
             throwAwayFromKeyboard()
+        case 11: // B
+            if let entry = preview.entry ?? clothesline.hoveredEntry { bigBang(entry) }
         case 3: // F
             if let entry = preview.entry ?? clothesline.hoveredEntry { toggleFavorite(entry) }
         case 49: // space
@@ -232,7 +253,9 @@ final class NotchWindow: NSPanel {
     /// Loads the lines and switches the window to its open size, with the handle kept where it is
     /// on screen.
     private func prepareLines() {
-        let (plan, emptyMessage) = planLines()
+        query = ""
+        search.reset()
+        let (plan, lines) = planLines()
         let height = plan.height
         openFrame = screenFrame
         let handleOnScreen = frame
@@ -241,26 +264,57 @@ final class NotchWindow: NSPanel {
         handle.frame = handleOnScreen.offsetBy(dx: -openFrame.minX, dy: -openFrame.minY)
 
         clothesline.frame = CGRect(x: 0, y: 0, width: openFrame.width, height: height)
-        hang(plan, emptyMessage: emptyMessage)
+        hang(plan, emptyMessage: lines.emptyMessage)
+        // The search box sits centered under the notch, above the lines.
+        search.frame = CGRect(x: (openFrame.width - SearchBox.size.width) / 2, y: openFrame.height - topInset + (SearchBox.band - SearchBox.size.height) / 2,
+                              width: SearchBox.size.width, height: SearchBox.size.height)
         thrown = []
         basket.entries = HistoryLibrary.shared.basket()
     }
 
     /// Rebuilds the lines in place after captures come back from the basket; `dropping` falls in
     /// with a bounce, or all of them when nil.
-    private func reloadLines(dropping entry: HistoryEntry?) {
-        let (plan, emptyMessage) = planLines()
+    private func reloadLines(dropping entry: HistoryEntry?, animated: Bool = true) {
+        let (plan, lines) = planLines()
         clothesline.frame = CGRect(x: 0, y: content.bounds.height - topInset - plan.height, width: content.bounds.width, height: plan.height)
-        hang(plan, emptyMessage: emptyMessage)
-        clothesline.playDropAnimation(only: entry)
+        hang(plan, emptyMessage: lines.emptyMessage)
+        search.found = lines.found
+        if animated { clothesline.playDropAnimation(only: entry) }
     }
 
     /// The lines get the screen below the notch, minus room for the basket at the bottom.
-    private func planLines() -> (ClotheslineView.Plan, String) {
-        let loaded = loadDays?() ?? (days: [], emptyMessage: "")
+    private func planLines() -> (ClotheslineView.Plan, Lines) {
+        let lines = loadDays?(query) ?? Lines(days: [], emptyMessage: "", found: nil)
         let visible = NSScreen.screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame
         let available = visible.maxY - topInset - visible.minY - BasketView.size.height - 40
-        return (ClotheslineView.plan(loaded.days, width: screenFrame.width, availableHeight: available), loaded.emptyMessage)
+        return (ClotheslineView.plan(lines.days, width: screenFrame.width, availableHeight: available), lines)
+    }
+
+    // MARK: Search
+
+    /// The lines follow what's typed, a moment after typing stops.
+    private func searchChanged(_ text: String) {
+        searchWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, case .open = phase, text != query else { return }
+            query = text
+            reloadLines(dropping: nil, animated: false)
+            // The photos still fade in, so the change reads as a new set.
+            clothesline.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { $0.duration = 0.18; self.clothesline.animator().alphaValue = 1 }
+        }
+        searchWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
+
+    private var searchWork: DispatchWorkItem?
+
+    /// Searches without typing (`--clothesline --search <text>`), after the lines settle.
+    func searchNow(_ text: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.search.type(text)
+            self?.searchChanged(text)
+        }
     }
 
     private func hang(_ plan: ClotheslineView.Plan, emptyMessage: String) {
@@ -291,6 +345,9 @@ final class NotchWindow: NSPanel {
         makeKey()
         startWatchingOutsideClicks()
         updateBasket()
+        search.isHidden = false
+        search.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.25; search.animator().alphaValue = 1 }
     }
 
     func collapse() {
@@ -310,6 +367,8 @@ final class NotchWindow: NSPanel {
         closeBasketPanel()
         setBasketShown(false)
         stopWatchingOutsideClicks()
+        search.isHidden = true
+        searchWork?.cancel()
         handle.showsHint = false
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.22
@@ -329,6 +388,22 @@ final class NotchWindow: NSPanel {
         setFrame(collapsedFrame, display: true)
         handle.frame = content.bounds
         handle.autoresizingMask = [.width, .height]
+    }
+
+    // MARK: Copying text
+
+    /// The text in a capture onto the clipboard, recognizing it now if needed.
+    private func copyText(of entry: HistoryEntry) {
+        Task {
+            let text = await HistoryLibrary.shared.recognizedText(for: entry)
+            if text.isEmpty {
+                NSSound.beep()
+                return
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            search.flash("已复制 \(text.split(separator: "\n").count) 行文字")
+        }
     }
 
     // MARK: The laundry basket
@@ -466,6 +541,8 @@ final class NotchWindow: NSPanel {
         add(favorite ? "取消收藏" : "收藏", favorite ? "star.slash" : "star", key: "f", #selector(favoriteFromMenu(_:)))
         add("预览", "eye", key: " ", #selector(previewFromMenu(_:)))
         add("浮动到屏幕上", "macwindow.on.rectangle", key: "\r", #selector(floatFromMenu(_:)))
+        add("复制文字", "text.viewfinder", key: "", #selector(copyTextFromMenu(_:)))
+        add("大爆炸", "sparkles", key: "b", #selector(bigBangFromMenu(_:)))
         menu.addItem(.separator())
         add(favorite ? "已收藏，不能扔" : "扔进洗衣篮", "basket", key: "\u{8}", #selector(throwFromMenu(_:)), enabled: !favorite)
         add("永久删除…", "trash", key: "", #selector(deleteFromMenu(_:)))
@@ -480,6 +557,24 @@ final class NotchWindow: NSPanel {
     @objc private func previewFromMenu(_ item: NSMenuItem) {
         guard let entry = item.representedObject as? HistoryEntry else { return }
         preview.show(entry, from: clothesline.screenRect(of: entry))
+    }
+
+    @objc private func bigBangFromMenu(_ item: NSMenuItem) {
+        guard let entry = item.representedObject as? HistoryEntry else { return }
+        bigBang(entry)
+    }
+
+    /// 大爆炸 on a capture on the line (or in the preview), bursting from where it's shown.
+    private func bigBang(_ entry: HistoryEntry) {
+        let image = entry.isRecording ? HistoryLibrary.shared.image(for: entry, pixelSize: 1600) : HistoryLibrary.shared.loadCapture(entry)?.image
+        guard let image, let screen = NSScreen.screens.first(where: { $0.frame == screenFrame }) ?? NSScreen.main,
+              let from = (preview.entry == entry ? preview.pictureScreenFrame : nil) ?? clothesline.screenRect(of: entry) else { return }
+        BigBangWindow.show(image: image, imageFrame: from, on: screen)
+    }
+
+    @objc private func copyTextFromMenu(_ item: NSMenuItem) {
+        guard let entry = item.representedObject as? HistoryEntry else { return }
+        copyText(of: entry)
     }
 
     @objc private func floatFromMenu(_ item: NSMenuItem) {
@@ -757,4 +852,97 @@ private final class HandleView: NSView {
     override func mouseDown(with event: NSEvent) { onMouseDown?() }
     override func mouseDragged(with event: NSEvent) { onMouseDragged?() }
     override func mouseUp(with event: NSEvent) { onMouseUp?() }
+}
+
+/// The search box above the lines: type to keep only the captures whose text (or app) has it.
+/// ⌘F or a click puts the cursor in it; Esc clears it, then leaves it. While it has the cursor,
+/// keys type into it rather than acting on the photos.
+@MainActor
+private final class SearchBox: NSView, NSSearchFieldDelegate {
+    var onChange: ((String) -> Void)?
+    /// Esc with nothing typed: give the keyboard back to the lines.
+    var onLeave: (() -> Void)?
+
+    /// How much room it takes above the lines, and its own size.
+    static let band: CGFloat = 40
+    static let size = CGSize(width: 320, height: 28)
+
+    /// How many captures matched, while searching.
+    var found: Int? {
+        didSet { showCount() }
+    }
+
+    private let field = NSSearchField()
+    private let count = NSTextField(labelWithString: "")
+
+    override init(frame: CGRect) {
+        super.init(frame: CGRect(origin: frame.origin, size: Self.size))
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        layer?.cornerRadius = Self.size.height / 2
+        appearance = NSAppearance(named: .darkAqua)
+
+        field.placeholderString = "搜索截图里的文字或应用（⌘F）"
+        field.font = .systemFont(ofSize: 12)
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.delegate = self
+        field.sendsSearchStringImmediately = true
+        field.frame = CGRect(x: 6, y: 3, width: Self.size.width - 84, height: 22)
+        addSubview(field)
+
+        count.font = .systemFont(ofSize: 11)
+        count.textColor = NSColor(white: 1, alpha: 0.6)
+        count.alignment = .right
+        count.frame = CGRect(x: Self.size.width - 80, y: 6, width: 68, height: 16)
+        addSubview(count)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    func focus() {
+        window?.makeFirstResponder(field)
+    }
+
+    func reset() {
+        field.stringValue = ""
+        found = nil
+    }
+
+    func type(_ text: String) {
+        field.stringValue = text
+    }
+
+    /// A short note in place of the count ("已复制 3 行文字").
+    func flash(_ note: String) {
+        count.stringValue = note
+        count.textColor = .systemGreen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.count.textColor = NSColor(white: 1, alpha: 0.6)
+            self?.showCount()
+        }
+    }
+
+    private func showCount() {
+        count.stringValue = found.map { $0 == 0 ? "没有找到" : "找到 \($0) 张" } ?? ""
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        onChange?(field.stringValue)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        if field.stringValue.isEmpty {
+            onLeave?()
+        } else {
+            field.stringValue = ""
+            onChange?("")
+        }
+        return true
+    }
 }

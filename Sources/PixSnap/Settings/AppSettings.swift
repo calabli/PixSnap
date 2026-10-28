@@ -29,6 +29,11 @@ final class AppSettings {
 
     static let captureDelayChoices = [3, 5, 10]
 
+    /// Whether the text in captures is recognized (on this Mac) so history can be searched.
+    var recognizesText: Bool {
+        didSet { defaults.set(recognizesText, forKey: Keys.recognizesText) }
+    }
+
     /// Frames per second for screen recordings.
     var recordingFPS: Int {
         didSet { defaults.set(recordingFPS, forKey: Keys.recordingFPS) }
@@ -95,6 +100,7 @@ final class AppSettings {
         static let captureDelay = "captureDelay"
         static let windowCaptureStyle = "windowCaptureStyle"
         static let recordingFPS = "recordingFPS"
+        static let recognizesText = "recognizesText"
         static let recordsCursor = "recordsCursor"
         static let copiesAfterCapture = "copiesAfterCapture"
         static let saveFolderPath = "saveFolderPath"
@@ -119,6 +125,7 @@ final class AppSettings {
         self.shortcuts = shortcuts
         let delay = defaults.integer(forKey: Keys.captureDelay)
         captureDelay = Self.captureDelayChoices.contains(delay) ? delay : 3
+        recognizesText = defaults.object(forKey: Keys.recognizesText) as? Bool ?? true
         let fps = defaults.integer(forKey: Keys.recordingFPS)
         recordingFPS = Self.recordingFPSChoices.contains(fps) ? fps : 30
         recordsCursor = defaults.object(forKey: Keys.recordsCursor) as? Bool ?? true

@@ -83,6 +83,7 @@ final class HistoryLibrary {
             }
             cleanUp()
             revision += 1
+            await recognizeText(of: entry.id, in: image.image)
         }
         return entry
     }
@@ -129,8 +130,65 @@ final class HistoryLibrary {
             }
             cleanUp()
             revision += 1
+            if let poster = thumbnail(for: entry)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                await recognizeText(of: entry.id, in: poster)
+            }
         }
         return entry
+    }
+
+    // MARK: Text
+
+    /// Finds the text in a capture and stores it for search, when Settings allows.
+    private func recognizeText(of id: UUID, in image: CGImage) async {
+        guard settings.recognizesText else { return }
+        let text = await TextRecognizer.text(in: image)
+        do {
+            try database?.setRecognizedText(text, id: id)
+            revision += 1
+        } catch {
+            NSLog("PixSnap could not store recognized text: \(error)")
+        }
+    }
+
+    private var isRecognizingBacklog = false
+
+    /// Works through captures taken before text recognition (or while it was off), newest first,
+    /// one at a time in the background.
+    func recognizeMissingText() {
+        guard settings.recognizesText, !isRecognizingBacklog, let database else { return }
+        isRecognizingBacklog = true
+        Task {
+            defer { isRecognizingBacklog = false }
+            while settings.recognizesText, let ids = try? database.idsAwaitingRecognition(limit: 10), !ids.isEmpty {
+                for id in ids {
+                    guard settings.recognizesText, let entry = try? database.entry(id: id) else { continue }
+                    // A recording is searched by its poster; a capture whose files are gone gets "".
+                    let image = entry.isRecording ? thumbnail(for: entry)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                                                  : loadCapture(entry)?.image
+                    if let image {
+                        await recognizeText(of: id, in: image)
+                    } else {
+                        try? database.setRecognizedText("", id: id)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Captures whose text or app name has every word of `text`, newest first.
+    func search(_ text: String, limit: Int) -> [HistoryEntry] {
+        (try? database?.search(text, limit: limit)) ?? []
+    }
+
+    /// The text found in a capture, recognizing it now if that hasn't happened yet.
+    func recognizedText(for entry: HistoryEntry) async -> String {
+        if let stored = (try? database?.entry(id: entry.id))??.ocrText { return stored }
+        let image = entry.isRecording ? thumbnail(for: entry)?.cgImage(forProposedRect: nil, context: nil, hints: nil) : loadCapture(entry)?.image
+        guard let image else { return "" }
+        let text = await TextRecognizer.text(in: image)
+        try? database?.setRecognizedText(text, id: entry.id)
+        return text
     }
 
     /// A recording's MP4.

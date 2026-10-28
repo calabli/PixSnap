@@ -138,5 +138,42 @@ final class HistoryDatabaseTests: XCTestCase {
         // A database from before recordings opens with them added.
         XCTAssertEqual(try HistoryDatabase(url: databaseURL).recent(limit: 5).map(\.id), [recording.id, screenshot.id])
     }
+
+    func testSearchFindsRecognizedTextAndAppNames() throws {
+        let database = try HistoryDatabase(url: databaseURL)
+        var order = entry(minutesAgo: 3, app: "微信")
+        order.ocrText = "订单详情\n金额：¥1,280.00\nStatus: Shipped"
+        var code = entry(minutesAgo: 2, app: "Xcode")
+        code.ocrText = "let total = 100_000 // 50% off"
+        let blank = entry(minutesAgo: 1, app: "Safari")
+        try [order, code, blank].forEach(database.insert)
+
+        XCTAssertEqual(try database.search("订单", limit: 10).map(\.id), [order.id])
+        // Case doesn't matter; every word has to match.
+        XCTAssertEqual(try database.search("status shipped", limit: 10).map(\.id), [order.id])
+        XCTAssertEqual(try database.search("status xcode", limit: 10).map(\.id), [])
+        // The app name counts too.
+        XCTAssertEqual(try database.search("safari", limit: 10).map(\.id), [blank.id])
+        // % and _ are plain characters, not wildcards.
+        XCTAssertEqual(try database.search("50%", limit: 10).map(\.id), [code.id])
+        XCTAssertEqual(try database.search("100_000", limit: 10).map(\.id), [code.id])
+        XCTAssertEqual(try database.search("1_0", limit: 10).map(\.id), [])
+        // Nothing typed: everything, newest first.
+        XCTAssertEqual(try database.search("  ", limit: 10).map(\.id), [blank.id, code.id, order.id])
+        // The basket is left out.
+        try database.setTrashed(Date(timeIntervalSince1970: 1_800_000_100), ids: [order.id])
+        XCTAssertEqual(try database.search("订单", limit: 10).map(\.id), [])
+    }
+
+    func testTracksWhichCapturesStillNeedRecognition() throws {
+        let database = try HistoryDatabase(url: databaseURL)
+        let older = entry(minutesAgo: 2), newer = entry(minutesAgo: 1)
+        try [older, newer].forEach(database.insert)
+        XCTAssertEqual(try database.idsAwaitingRecognition(limit: 10), [newer.id, older.id])
+        try database.setRecognizedText("", id: newer.id)
+        try database.setRecognizedText("你好", id: older.id)
+        XCTAssertEqual(try database.idsAwaitingRecognition(limit: 10), [])
+        XCTAssertEqual(try database.entry(id: older.id)?.ocrText, "你好")
+    }
 }
 #endif

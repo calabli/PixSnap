@@ -106,6 +106,8 @@ final class CaptureCoordinator {
         pin(capture, at: ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame), on: screen)
         if pinned { floatingCaptures.last?.setPinned(true) }
         if CommandLine.arguments.contains("--bar") { floatingCaptures.last?.showBar() }
+        if CommandLine.arguments.contains("--select-text") { floatingCaptures.last?.selectText() }
+        if CommandLine.arguments.contains("--bigbang") { floatingCaptures.last?.bigBangNow() }
     }
 
     /// Development: shows the selection overlay over an image file instead of the live screen.

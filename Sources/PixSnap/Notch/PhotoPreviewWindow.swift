@@ -27,7 +27,7 @@ final class PhotoPreviewWindow: NSPanel {
     private var card: CALayer?
     private let caption = NSTextField(labelWithString: "")
     private let hint = NSTextField(labelWithString: PhotoPreviewWindow.hintText)
-    private static let hintText = "← → 切换 · F 收藏 · 空格或 Esc 关闭 · 点击图片浮动到屏幕上 · Delete 扔进洗衣篮"
+    private static let hintText = "← → 切换 · F 收藏 · B 大爆炸 · ⌘C 复制文字 · 空格或 Esc 关闭 · 点击图片浮动到屏幕上 · Delete 扔进洗衣篮"
     private var details = ""
     private var source: CGRect?
 
@@ -137,6 +137,11 @@ final class PhotoPreviewWindow: NSPanel {
             incoming.add(fade(from: 0, to: 1, duration: 0.22), forKey: "fade")
             fadeChrome(in: true, below: target)
         }
+    }
+
+    /// Where the picture is on screen, while showing.
+    var pictureScreenFrame: CGRect? {
+        card.map { $0.frame.offsetBy(dx: frame.minX, dy: frame.minY) }
     }
 
     /// The caption picks up or drops its star.

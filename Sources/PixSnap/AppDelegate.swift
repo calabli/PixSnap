@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         HistoryLibrary.shared.cleanUp()
         ImageExporter.removeOldTemporaryFiles()
         ScreenRecorder.removeOldRecordings()
+        // Older captures get their text recognized once launch has settled.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { HistoryLibrary.shared.recognizeMissingText() }
         notch.rebuild()
         settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
 
@@ -68,7 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // `--basket` to open the laundry basket, or `--throw` to throw the newest photo into it.
         if arguments.contains("--clothesline") {
             notch.openOnScreenUnderMouse(previewingNewest: arguments.contains("--preview"), openingBasket: arguments.contains("--basket"),
-                                         throwingNewest: arguments.contains("--throw"))
+                                         throwingNewest: arguments.contains("--throw"),
+                                         searching: arguments.firstIndex(of: "--search").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil })
         }
         if let flag = arguments.firstIndex(of: "--history-add"), arguments.indices.contains(flag + 1) {
             coordinator.addToHistory(imageAt: URL(fileURLWithPath: arguments[flag + 1]))

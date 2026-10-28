@@ -1,11 +1,14 @@
 import AppKit
 import PixSnapCore
+import VisionKit
 
 /// A finished capture floating on screen where it was taken. Clicking the image shows the bar
 /// underneath (and clicking again hides it): quick annotation tools that draw right on the image,
 /// zoom, favorite (when it's in history), pin, edit mode, copy, save, delete (from history, for
 /// good) and close. ⌘+ / ⌘− / ⌘0 and
-/// pinching zoom too. With no tool
+/// pinching zoom too. 选取文字 turns on Live Text: the text in the image is highlighted and can be
+/// selected like a document's (drag, double-click a word), ⌘C copying the selection — or, with
+/// nothing selected, all of it. With no tool
 /// selected, dragging the image moves it; double-click opens edit mode; Esc drops the tool, then closes.
 /// To take it to another app (with its annotations), drag the 拖出 handle in the bar, or ⌘-drag the
 /// image, which also works while pinned.
@@ -26,6 +29,10 @@ final class FloatingCaptureWindow: NSPanel {
     private let unpinButton = NSButton()
     private var imageRect: CGRect
     private(set) var isPinned = false
+    /// Live Text over the image while selecting text.
+    private let textOverlay = ImageAnalysisOverlayView()
+    private var selectsText = false
+    private static let analyzer = ImageAnalyzer()
     /// The bar shows only after the image is clicked.
     private var barShown = false
 
@@ -86,6 +93,11 @@ final class FloatingCaptureWindow: NSPanel {
         bar.onDragOut = { [weak self] view, event in self?.dragOut(from: view, event: event) }
         bar.onEdit = { [weak self] in self?.edit() }
         bar.onCopy = { [weak self] in self?.copyImage() }
+        bar.onBigBang = { [weak self] in self?.bigBang() }
+        bar.onCopyText = { [weak self] in
+            guard let self else { return }
+            setSelectsText(!selectsText)
+        }
         bar.onSave = { [weak self] in self?.saveImage() }
         bar.onClose = { [weak self] in self?.close() }
         bar.onDelete = { [weak self] in self?.deleteForGood() }
@@ -105,6 +117,11 @@ final class FloatingCaptureWindow: NSPanel {
             if hovering { refreshFavorite() }
         }
         content.addSubview(canvas)
+        textOverlay.isHidden = true
+        textOverlay.delegate = self
+        // The bar's button already turns it on and off.
+        textOverlay.isSupplementaryInterfaceHidden = true
+        content.addSubview(textOverlay)
         content.addSubview(bar)
         feedback.frame = layout.image
         content.addSubview(feedback)
@@ -120,6 +137,11 @@ final class FloatingCaptureWindow: NSPanel {
 
     /// Shows the bar without a click (`--pin … --bar`).
     func showBar() { setBarShown(true) }
+
+    /// Turns on text selection without a click (`--pin … --select-text`).
+    func selectText() { setSelectsText(true) }
+
+    @objc private func selectTextFromMenu() { setSelectsText(!selectsText) }
 
     /// Fades the bar in (rising a little) or out.
     private func setBarShown(_ shown: Bool) {
@@ -186,6 +208,7 @@ final class FloatingCaptureWindow: NSPanel {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.modifierFlags.contains(.command) else { return super.performKeyEquivalent(with: event) }
         switch event.charactersIgnoringModifiers {
+        case "c" where selectsText: copySelectedText()
         case "=", "+": zoom(by: 1)
         case "-": zoom(by: -1)
         case "0": zoom(by: 0)
@@ -267,6 +290,7 @@ final class FloatingCaptureWindow: NSPanel {
         }
         imageRect = canvas.frame
         feedback.frame = canvas.frame
+        textOverlay.frame = canvas.frame
         let side: CGFloat = 24
         unpinButton.frame = CGRect(x: canvas.frame.maxX - side - 6, y: canvas.frame.maxY - side - 6, width: side, height: side)
         display()
@@ -284,6 +308,8 @@ final class FloatingCaptureWindow: NSPanel {
             ("取消钉住", #selector(unpin)),
             ("编辑模式", #selector(editFromMenu)),
             ("复制", #selector(copyFromMenu)),
+            ("选取文字", #selector(selectTextFromMenu)),
+            ("大爆炸", #selector(bigBangFromMenu)),
             ("保存", #selector(saveFromMenu)),
         ]
         if historyID != nil { items.insert((isFavorite ? "取消收藏" : "收藏", #selector(favoriteFromMenu)), at: 1) }
@@ -348,6 +374,7 @@ final class FloatingCaptureWindow: NSPanel {
     }
 
     override func cancelOperation(_ sender: Any?) {
+        if selectsText { return setSelectsText(false) }
         close()
     }
 
@@ -358,6 +385,8 @@ final class FloatingCaptureWindow: NSPanel {
     }
 
     private func setTool(_ tool: EditorTool) {
+        // Drawing and selecting text don't mix.
+        if tool != .select { setSelectsText(false) }
         canvas.tool = tool
         bar.show(tool)
         // A tool picked by its key shows the bar, so it's clear which one is on.
@@ -377,6 +406,66 @@ final class FloatingCaptureWindow: NSPanel {
 
     private func renderedCapture() -> Capture? {
         canvas.renderedImage().map { Capture(image: $0, scale: capture.scale) }
+    }
+
+    // MARK: Selecting text
+
+    /// 大爆炸: the text bursts out into words to pick.
+    private func bigBang() {
+        guard let result = renderedCapture(), let screen = screen ?? NSScreen.main else { return }
+        setSelectsText(false)
+        BigBangWindow.show(image: result.image, imageFrame: imageFrame, on: screen)
+    }
+
+    @objc private func bigBangFromMenu() { bigBang() }
+
+    /// Bursts without a click (`--pin … --bigbang`).
+    func bigBangNow() { bigBang() }
+
+    /// Live Text on (the image as it looks now is read for text, which is then highlighted and
+    /// selectable) or off.
+    private func setSelectsText(_ on: Bool) {
+        guard on != selectsText else { return }
+        selectsText = on
+        bar.setSelectsText(on)
+        guard on else {
+            textOverlay.isHidden = true
+            textOverlay.preferredInteractionTypes = []
+            textOverlay.analysis = nil
+            return
+        }
+        if canvas.tool != .select { setTool(.select) }
+        guard ImageAnalyzer.isSupported, let result = renderedCapture() else {
+            selectsText = false
+            bar.setSelectsText(false)
+            return feedback.show("这台 Mac 不支持识别文字")
+        }
+        feedback.show("正在识别文字…")
+        Task {
+            let analysis = try? await Self.analyzer.analyze(result.image, orientation: .up, configuration: ImageAnalyzer.Configuration([.text]))
+            guard selectsText else { return }
+            guard let analysis, analysis.hasResults(for: .text) else {
+                setSelectsText(false)
+                return feedback.show("没有识别到文字")
+            }
+            textOverlay.frame = canvas.frame
+            textOverlay.analysis = analysis
+            textOverlay.preferredInteractionTypes = .textSelection
+            textOverlay.selectableItemsHighlighted = true
+            textOverlay.isHidden = false
+            makeKey()
+            feedback.show("拖动选择文字，⌘C 复制")
+        }
+    }
+
+    /// The selected text, or all of it when nothing is selected, onto the clipboard.
+    private func copySelectedText() {
+        let selected = textOverlay.selectedText
+        let text = selected.isEmpty ? (textOverlay.analysis?.transcript ?? "") : selected
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        feedback.show(selected.isEmpty ? "已复制全部文字" : "已复制")
     }
 
     private func copyImage() {
@@ -446,6 +535,8 @@ private final class ActionBar: NSVisualEffectView {
     var onDragOut: ((NSView, NSEvent) -> Void)?
     var onEdit: (() -> Void)?
     var onCopy: (() -> Void)?
+    var onCopyText: (() -> Void)?
+    var onBigBang: (() -> Void)?
     var onSave: (() -> Void)?
     var onClose: (() -> Void)?
     /// The delete button was clicked twice: delete for good.
@@ -508,6 +599,8 @@ private final class ActionBar: NSVisualEffectView {
             button("钉住", symbol: "pin", tip: "钉在屏幕上：隐藏操作栏，只留图片，可拖动", action: #selector(pin)),
             button("编辑模式", symbol: "slider.horizontal.3", tip: "更多编辑：颜色、粗细、裁剪等（双击图片）", action: #selector(edit)),
             button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
+            selectTextButtonView(),
+            button(nil, symbol: "sparkles", tip: "大爆炸：把图里的文字炸成一个个词，点选后复制或搜索", action: #selector(bigBang)),
             dragHandle(),
             button("保存", symbol: "square.and.arrow.down", tip: "保存为 PNG，选择保存位置", action: #selector(save)),
             deleteButtonView(),
@@ -563,6 +656,18 @@ private final class ActionBar: NSVisualEffectView {
         button.font = .systemFont(ofSize: 12)
         button.toolTip = tip
         return button
+    }
+
+    private var selectTextButton: NSButton!
+
+    private func selectTextButtonView() -> NSButton {
+        selectTextButton = button(nil, symbol: "text.viewfinder", tip: "选取文字：像文档一样选择图里的文字并复制（再点一下退出）", action: #selector(copyText))
+        return selectTextButton
+    }
+
+    func setSelectsText(_ on: Bool) {
+        selectTextButton.contentTintColor = on ? .controlAccentColor : nil
+        selectTextButton.state = on ? .on : .off
     }
 
     private func deleteButtonView() -> NSButton {
@@ -625,6 +730,8 @@ private final class ActionBar: NSVisualEffectView {
     @objc private func zoomReset() { onZoom?(0) }
     @objc private func edit() { onEdit?() }
     @objc private func copyImage() { onCopy?() }
+    @objc private func copyText() { onCopyText?() }
+    @objc private func bigBang() { onBigBang?() }
     @objc private func save() { onSave?() }
     @objc private func closeCapture() { onClose?() }
 }
@@ -754,5 +861,12 @@ final class FeedbackBadge: NSView {
             guard !Task.isCancelled, let self else { return }
             NSAnimationContext.runAnimationGroup({ $0.duration = 0.3; self.animator().alphaValue = 0 }, completionHandler: nil)
         }
+    }
+}
+
+extension FloatingCaptureWindow: ImageAnalysisOverlayViewDelegate {
+    /// The image fills the overlay exactly.
+    func contentsRect(for overlayView: ImageAnalysisOverlayView) -> CGRect {
+        CGRect(x: 0, y: 0, width: 1, height: 1)
     }
 }
