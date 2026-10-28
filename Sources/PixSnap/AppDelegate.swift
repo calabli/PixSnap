@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await ScreenCapturer.shared.warmUp() }
         HistoryLibrary.shared.cleanUp()
         ImageExporter.removeOldTemporaryFiles()
+        ScreenRecorder.removeOldRecordings()
         notch.rebuild()
         settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
 
@@ -47,7 +48,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let numbers = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }
             if numbers.count == 4 { coordinator.startDelayedCapture(of: CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3])) }
         }
-        // `--capture region|fullScreen|scrolling|delayed|window` starts that capture, as its shortcut would.
+        // `--record x,y,w,h seconds [out.gif]`: records that region (global AppKit coordinates) for that
+        // long, and exports a GIF too if a path is given.
+        if let flag = arguments.firstIndex(of: "--record"), arguments.indices.contains(flag + 2) {
+            let numbers = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }
+            if numbers.count == 4 {
+                coordinator.startRecording(of: CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3]),
+                                           for: Double(arguments[flag + 2]) ?? 3,
+                                           gif: arguments.indices.contains(flag + 3) && arguments[flag + 3].hasSuffix(".gif")
+                                               ? URL(fileURLWithPath: arguments[flag + 3]) : nil)
+            }
+        }
+        // `--capture region|fullScreen|scrolling|delayed|window|recording` starts that capture, as its shortcut would.
         if let flag = arguments.firstIndex(of: "--capture"), arguments.indices.contains(flag + 1),
            let action = CaptureAction(rawValue: arguments[flag + 1]) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.start(action) }
@@ -143,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .scrolling: coordinator.startScrollingCapture()
         case .delayed: coordinator.startDelayedCapture()
         case .window: coordinator.startWindowCapture()
+        case .recording: coordinator.toggleRecording()
         }
     }
 
@@ -172,7 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         for entry in entries {
-            var title = (entry.isFavorite ? "★ " : "") + Self.recentDateFormatter.string(from: entry.createdAt)
+            var title = (entry.isFavorite ? "★ " : "") + (entry.isRecording ? "录屏 · " : "") + Self.recentDateFormatter.string(from: entry.createdAt)
             if let app = entry.sourceAppName { title += " · \(app)" }
             let item = NSMenuItem(title: title, action: #selector(pinRecent(_:)), keyEquivalent: "")
             item.target = self

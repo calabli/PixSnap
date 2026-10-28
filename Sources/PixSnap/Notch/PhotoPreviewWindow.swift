@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import PixSnapCore
 
@@ -83,7 +84,15 @@ final class PhotoPreviewWindow: NSPanel {
     /// Shows `entry`: zooming out of `source` (a screen rect) when opening, or sliding in from the
     /// side `direction` points to (-1 left, 1 right) when switching.
     func show(_ entry: HistoryEntry, from source: CGRect?, direction: Int = 0) {
-        guard let capture = HistoryLibrary.shared.loadCapture(entry) else { return }
+        // A recording shows its poster, with the video playing over it.
+        let picture: (image: CGImage, pointSize: CGSize)
+        if entry.isRecording {
+            guard let poster = HistoryLibrary.shared.image(for: entry, pixelSize: 1600) else { return }
+            picture = (poster, CGSize(width: CGFloat(entry.pixelWidth) / entry.scale, height: CGFloat(entry.pixelHeight) / entry.scale))
+        } else {
+            guard let capture = HistoryLibrary.shared.loadCapture(entry) else { return }
+            picture = (capture.image, capture.pointSize)
+        }
         let opening = self.entry == nil
         self.entry = entry
         self.source = source.map(local)
@@ -92,12 +101,17 @@ final class PhotoPreviewWindow: NSPanel {
         var details = [Self.timeFormatter.string(from: entry.createdAt)]
         if let app = entry.sourceAppName { details.append(app) }
         details.append("\(entry.pixelWidth) × \(entry.pixelHeight)")
+        if let duration = entry.recordingDuration {
+            let seconds = Int(duration.rounded())
+            details.insert(String(format: "录屏 %d:%02d", seconds / 60, seconds % 60), at: 0)
+        }
         self.details = details.joined(separator: " · ")
         setCaption(favorite: HistoryLibrary.shared.isFavorite(entry.id))
         hint.stringValue = Self.hintText
 
-        let target = targetFrame(for: capture.pointSize)
-        let incoming = makeCard(capture.image, frame: target)
+        let target = targetFrame(for: picture.pointSize)
+        let incoming = makeCard(picture.image, frame: target)
+        if entry.isRecording, let video = HistoryLibrary.shared.videoURL(for: entry) { play(video, on: incoming) }
         let outgoing = card
         card = incoming
         stage.layer?.addSublayer(incoming)
@@ -242,6 +256,29 @@ final class PhotoPreviewWindow: NSPanel {
     private func removeCard(_ layer: CALayer) {
         layer.removeFromSuperlayer()
         if card === layer { card = nil }
+        if let playing = players[ObjectIdentifier(layer)] {
+            playing.player.pause()
+            players[ObjectIdentifier(layer)] = nil
+        }
+    }
+
+    /// Recordings playing on cards, kept until their card goes.
+    private var players: [ObjectIdentifier: (player: AVQueuePlayer, looper: AVPlayerLooper)] = [:]
+
+    /// Plays `video` on a loop, muted, over the card's poster.
+    private func play(_ video: URL, on card: CALayer) {
+        let player = AVQueuePlayer()
+        let looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: video))
+        player.isMuted = true
+        let layer = AVPlayerLayer(player: player)
+        layer.frame = card.bounds
+        layer.videoGravity = .resizeAspectFill
+        layer.cornerRadius = Self.cornerRadius
+        layer.cornerCurve = .continuous
+        layer.masksToBounds = true
+        card.addSublayer(layer)
+        players[ObjectIdentifier(card)] = (player, looper)
+        player.play()
     }
 
     private func fade(from: Float, to: Float, duration: Double) -> CABasicAnimation {

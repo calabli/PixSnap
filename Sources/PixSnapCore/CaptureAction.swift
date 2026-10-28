@@ -12,6 +12,8 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
     case delayed
     /// The window under the cursor, by itself.
     case window
+    /// A screen recording of a region, kept as MP4 or GIF.
+    case recording
 
     public var title: String {
         switch self {
@@ -20,11 +22,12 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
         case .scrolling: "长截图"
         case .delayed: "延时截图"
         case .window: "截取窗口"
+        case .recording: "录屏"
         }
     }
 
     /// ⌘⇧2 for the everyday one; the others on ⌥⇧ and a number, away from the system's ⌘⇧3/4/5.
-    /// 18–21 are the "1"–"4" keys on macOS.
+    /// 18–21 and 23 are the "1"–"5" keys on macOS.
     public var defaultShortcut: Shortcut {
         switch self {
         case .region: .defaultCapture
@@ -32,6 +35,7 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
         case .scrolling: Shortcut(keyCode: 19, modifiers: [.option, .shift], keyLabel: "2")
         case .delayed: Shortcut(keyCode: 20, modifiers: [.option, .shift], keyLabel: "3")
         case .window: Shortcut(keyCode: 21, modifiers: [.option, .shift], keyLabel: "4")
+        case .recording: Shortcut(keyCode: 23, modifiers: [.option, .shift], keyLabel: "5")
         }
     }
 }

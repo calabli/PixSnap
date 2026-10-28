@@ -181,7 +181,8 @@ private final class SendableStitcher: @unchecked Sendable {
 /// the apps underneath; and it's PixSnap's, so it's never in the capture.
 @MainActor
 final class RegionFrameWindow: NSPanel {
-    init(region: CGRect, screen: NSScreen) {
+    /// `color` is the outline's: the accent color, or red while recording.
+    init(region: CGRect, screen: NSScreen, color: NSColor = .controlAccentColor) {
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         level = .screenSaver
         isOpaque = false
@@ -210,7 +211,7 @@ final class RegionFrameWindow: NSPanel {
         let outline = CAShapeLayer()
         outline.path = CGPath(rect: local.insetBy(dx: -1.5, dy: -1.5), transform: nil)
         outline.fillColor = nil
-        outline.strokeColor = NSColor.controlAccentColor.cgColor
+        outline.strokeColor = color.cgColor
         outline.lineWidth = 2
         outline.lineDashPattern = [8, 5]
         let march = CABasicAnimation(keyPath: "lineDashPhase")

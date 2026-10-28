@@ -22,6 +22,9 @@ final class ClotheslineView: NSView {
     /// The captures on the lines in reading order: top line first, left to right.
     var entries: [HistoryEntry] { photos.filter { !$0.isEmpty }.map(\.entry) }
 
+    /// The most recently taken capture on the lines (the end of the top line, not of the last one).
+    var newestEntry: HistoryEntry? { entries.max { $0.createdAt < $1.createdAt } }
+
     static let maximumDays = 3
     /// Above the tallest photo on a line: the rope's distance from the top of its row, its dip,
     /// the gap between rope and photo, the swing room under the photo and the space before the
@@ -90,8 +93,10 @@ final class ClotheslineView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     /// Hangs what `plan` says; `emptyMessage` shows when there's nothing to hang. `image` supplies a
-    /// picture sharp enough for a given longest side in pixels.
-    func show(_ plan: Plan, style: RopeStyle, image: (HistoryEntry, CGFloat) -> CGImage?, emptyMessage: String) {
+    /// picture sharp enough for a given longest side in pixels; `moving`, a recording's looping
+    /// thumbnail.
+    func show(_ plan: Plan, style: RopeStyle, image: (HistoryEntry, CGFloat) -> CGImage?,
+              moving: (HistoryEntry) -> (frames: [CGImage], delay: Double)? = { _ in nil }, emptyMessage: String) {
         ropes.style = style
         photos.forEach { $0.removeFromSuperview() }
         photos = []
@@ -134,6 +139,7 @@ final class ClotheslineView: NSView {
                     entry: entry,
                     size: size,
                     thumbnail: image(entry, max(size.width, size.height) * scale),
+                    moving: moving(entry),
                     isFavorite: entry.isFavorite,
                     tilt: CGFloat(random.next(in: -0.06...0.06)) * min(1, 100 / size.height),
                     period: random.next(in: 1.6...2.8),
@@ -325,8 +331,8 @@ private final class PhotoView: NSView {
 
     /// `slope` is the rope's angle where the photo hangs; `ropeClearance` how far the rope reaches
     /// below its center line, so the photo hangs clear of it.
-    init(entry: HistoryEntry, size: CGSize, thumbnail: CGImage?, isFavorite: Bool, tilt: CGFloat, period: Double,
-         slope: CGFloat, ropeClearance: CGFloat) {
+    init(entry: HistoryEntry, size: CGSize, thumbnail: CGImage?, moving: (frames: [CGImage], delay: Double)? = nil,
+         isFavorite: Bool, tilt: CGFloat, period: Double, slope: CGFloat, ropeClearance: CGFloat) {
         self.entry = entry
         self.isFavorite = isFavorite
         self.period = period
@@ -352,6 +358,10 @@ private final class PhotoView: NSView {
         Self.dress(photo, size: size, thumbnail: thumbnail)
         photo.position = CGPoint(x: size.width / 2, y: size.height / 2)
         hanger.addSublayer(photo)
+        if let duration = entry.recordingDuration {
+            Self.play(moving, on: photo)
+            photo.addSublayer(Self.recordingBadge(duration: duration, in: photo.bounds))
+        }
 
         // Clips sit on the hanger's top edge, which is the rope.
         let inset = min(max(size.width * 0.12, 14), 40)
@@ -395,6 +405,37 @@ private final class PhotoView: NSView {
         picture.masksToBounds = true
         picture.backgroundColor = NSColor(white: 0.85, alpha: 1).cgColor
         layer.addSublayer(picture)
+    }
+
+    /// A recording's thumbnail loops on the photo, frame by frame.
+    private static func play(_ moving: (frames: [CGImage], delay: Double)?, on photo: CALayer) {
+        guard let moving, let picture = photo.sublayers?.first else { return }
+        let loop = CAKeyframeAnimation(keyPath: "contents")
+        loop.values = moving.frames
+        loop.calculationMode = .discrete
+        loop.duration = Double(moving.frames.count) * moving.delay
+        loop.repeatCount = .infinity
+        picture.add(loop, forKey: "loop")
+    }
+
+    /// "▶ 0:12" in the photo's bottom-left corner, so a recording reads as one.
+    private static func recordingBadge(duration: Double, in bounds: CGRect) -> CALayer {
+        let seconds = Int(duration.rounded())
+        let text = CATextLayer()
+        text.string = String(format: "▶ %d:%02d", seconds / 60, seconds % 60)
+        text.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
+        text.fontSize = 10
+        text.foregroundColor = NSColor.white.cgColor
+        text.alignmentMode = .center
+        text.contentsScale = 2
+        let width: CGFloat = 46, height: CGFloat = 16
+        let badge = CALayer()
+        badge.frame = CGRect(x: 6, y: 6, width: width, height: height)
+        badge.backgroundColor = NSColor.black.withAlphaComponent(0.6).cgColor
+        badge.cornerRadius = height / 2
+        text.frame = CGRect(x: 0, y: 1.5, width: width, height: height - 2)
+        badge.addSublayer(text)
+        return badge
     }
 
     // MARK: Motion

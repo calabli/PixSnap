@@ -19,11 +19,16 @@ public struct HistoryEntry: Equatable, Sendable {
     /// When it was thrown into the laundry basket; nil while it hangs on the line. Basket entries
     /// are left out of `recent` and `count` until restored, and emptied for good later.
     public var trashedAt: Date?
+    /// For a screen recording, its length in seconds; nil for a screenshot. A recording's file is
+    /// an MP4 next to the others, with a still poster and a small moving thumbnail.
+    public var recordingDuration: Double?
+
+    public var isRecording: Bool { recordingDuration != nil }
 
     public init(
         id: UUID = UUID(), createdAt: Date, pixelWidth: Int, pixelHeight: Int, scale: Double,
         sourceAppName: String? = nil, sourceBundleID: String? = nil, isFavorite: Bool = false, ocrText: String? = nil,
-        trashedAt: Date? = nil
+        trashedAt: Date? = nil, recordingDuration: Double? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -35,6 +40,7 @@ public struct HistoryEntry: Equatable, Sendable {
         self.isFavorite = isFavorite
         self.ocrText = ocrText
         self.trashedAt = trashedAt
+        self.recordingDuration = recordingDuration
     }
 }
 
@@ -81,6 +87,11 @@ public final class HistoryDatabase {
             try execute("ALTER TABLE captures ADD COLUMN trashed_at REAL")
             try execute("PRAGMA user_version = 1")
         }
+        if version < 2 {
+            // 2: screen recordings.
+            try execute("ALTER TABLE captures ADD COLUMN recording_duration REAL")
+            try execute("PRAGMA user_version = 2")
+        }
     }
 
     deinit {
@@ -89,13 +100,15 @@ public final class HistoryDatabase {
 
     public func insert(_ entry: HistoryEntry) throws {
         try run("""
-            INSERT INTO captures (id, created_at, pixel_width, pixel_height, scale, source_app_name, source_bundle_id, is_favorite, ocr_text)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO captures (id, created_at, pixel_width, pixel_height, scale, source_app_name, source_bundle_id, is_favorite, ocr_text,
+                                  recording_duration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 .text(entry.id.uuidString), .real(entry.createdAt.timeIntervalSince1970),
                 .integer(entry.pixelWidth), .integer(entry.pixelHeight), .real(entry.scale),
                 .optionalText(entry.sourceAppName), .optionalText(entry.sourceBundleID),
                 .integer(entry.isFavorite ? 1 : 0), .optionalText(entry.ocrText),
+                entry.recordingDuration.map { .real($0) } ?? .null,
             ])
     }
 
@@ -164,7 +177,7 @@ public final class HistoryDatabase {
     // MARK: SQLite plumbing
 
     private static let columns =
-        "id, created_at, pixel_width, pixel_height, scale, source_app_name, source_bundle_id, is_favorite, ocr_text, trashed_at"
+        "id, created_at, pixel_width, pixel_height, scale, source_app_name, source_bundle_id, is_favorite, ocr_text, trashed_at, recording_duration"
 
     private enum Value {
         case text(String)
@@ -258,7 +271,8 @@ public final class HistoryDatabase {
             sourceBundleID: text(6),
             isFavorite: sqlite3_column_int64(statement, 7) != 0,
             ocrText: text(8),
-            trashedAt: sqlite3_column_type(statement, 9) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 9))
+            trashedAt: sqlite3_column_type(statement, 9) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 9)),
+            recordingDuration: sqlite3_column_type(statement, 10) == SQLITE_NULL ? nil : sqlite3_column_double(statement, 10)
         )
     }
 

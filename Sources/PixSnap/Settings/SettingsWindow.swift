@@ -150,6 +150,18 @@ struct SettingsView: View {
                 Text("会删除 \(history.count) 张截图，包括收藏的，无法恢复。已经保存到“保存位置”的文件不受影响。")
             }
 
+            Section("录屏") {
+                Picker("帧率", selection: $settings.recordingFPS) {
+                    ForEach(AppSettings.recordingFPSChoices, id: \.self) { Text("\($0) 帧/秒").tag($0) }
+                }
+                Toggle("录制鼠标指针", isOn: $settings.recordsCursor)
+                HStack {
+                    Text("先框选区域或单击一个窗口，然后开始录制；点“停止”或再按一次录屏快捷键结束。录完可以存成 MP4 或 GIF。")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+
             Section("窗口截图") {
                 Toggle("保留窗口阴影", isOn: $settings.windowCaptureStyle.keepsShadow)
                 Picker("背景", selection: $settings.windowCaptureStyle.background) {

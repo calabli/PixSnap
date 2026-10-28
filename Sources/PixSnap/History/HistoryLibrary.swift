@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import ImageIO
 import Observation
@@ -84,6 +85,68 @@ final class HistoryLibrary {
             revision += 1
         }
         return entry
+    }
+
+    // MARK: Recordings
+
+    /// Keeps a screen recording in history: the MP4 moves in next to the screenshots, and a still
+    /// poster and a small looping thumbnail (for the clothesline) are made in the background. Returns
+    /// its entry right away, or nil when history is off (the file then stays where it is).
+    @discardableResult
+    func addRecording(_ video: URL, duration: Double, pixelSize: CGSize, scale: CGFloat, sourceApp: NSRunningApplication?) -> HistoryEntry? {
+        guard settings.savesHistory, let database else { return nil }
+        let entry = HistoryEntry(createdAt: Date(), pixelWidth: Int(pixelSize.width), pixelHeight: Int(pixelSize.height), scale: scale,
+                                 sourceAppName: sourceApp?.localizedName, sourceBundleID: sourceApp?.bundleIdentifier,
+                                 recordingDuration: duration)
+        let stored = HistoryFiles.videoURL(id: entry.id, in: originals)
+        do {
+            try FileManager.default.moveItem(at: video, to: stored)
+        } catch {
+            NSLog("PixSnap could not keep a recording in history: \(error)")
+            return nil
+        }
+        let thumbnails = thumbnails, originals = originals
+        pendingIDs.insert(entry.id)
+        Task {
+            defer { pendingIDs.remove(entry.id) }
+            do {
+                try await HistoryFiles.writeRecordingThumbnails(stored, duration: duration, id: entry.id, thumbnails: thumbnails)
+            } catch {
+                NSLog("PixSnap could not make a recording's thumbnails: \(error)")
+            }
+            if pendingDeletions.remove(entry.id) != nil {
+                HistoryFiles.remove(id: entry.id, originals: originals, thumbnails: thumbnails)
+                return
+            }
+            do {
+                var recorded = entry
+                if let favorite = pendingFavorites.removeValue(forKey: entry.id) { recorded.isFavorite = favorite }
+                try database.insert(recorded)
+            } catch {
+                NSLog("PixSnap could not record a recording in history: \(error)")
+                HistoryFiles.remove(id: entry.id, originals: originals, thumbnails: thumbnails)
+                return
+            }
+            cleanUp()
+            revision += 1
+        }
+        return entry
+    }
+
+    /// A recording's MP4.
+    func videoURL(for entry: HistoryEntry) -> URL? {
+        let url = HistoryFiles.videoURL(id: entry.id, in: originals)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// A recording's small looping thumbnail: its frames and how long each shows.
+    func movingThumbnail(for entry: HistoryEntry) -> (frames: [CGImage], delay: Double)? {
+        guard entry.isRecording,
+              let source = CGImageSourceCreateWithURL(thumbnails.appendingPathComponent("\(entry.id.uuidString).gif") as CFURL, nil) else { return nil }
+        let frames = (0 ..< CGImageSourceGetCount(source)).compactMap { CGImageSourceCreateImageAtIndex(source, $0, nil) }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let delay = (properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any])?[kCGImagePropertyGIFDelayTime] as? Double ?? 0.12
+        return frames.count > 1 ? (frames, delay) : nil
     }
 
     // MARK: Reading
@@ -268,10 +331,34 @@ private enum HistoryFiles {
     }
 
     static func remove(id: UUID, originals: URL, thumbnails: URL) {
-        for name in ["\(id.uuidString).heic", "\(id.uuidString).png"] {
+        for name in ["\(id.uuidString).heic", "\(id.uuidString).png", "\(id.uuidString).mp4"] {
             try? FileManager.default.removeItem(at: originals.appendingPathComponent(name))
         }
-        try? FileManager.default.removeItem(at: thumbnails.appendingPathComponent("\(id.uuidString).jpg"))
+        for name in ["\(id.uuidString).jpg", "\(id.uuidString).gif"] {
+            try? FileManager.default.removeItem(at: thumbnails.appendingPathComponent(name))
+        }
+    }
+
+    static func videoURL(id: UUID, in folder: URL) -> URL {
+        folder.appendingPathComponent("\(id.uuidString).mp4")
+    }
+
+    /// A recording's poster (its first frame, as big as a large photo on the line needs) and its
+    /// looping thumbnail (8 frames a second, the first 10 seconds, up to 480 pixels wide).
+    @MainActor
+    static func writeRecordingThumbnails(_ video: URL, duration: Double, id: UUID, thumbnails: URL) async throws {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: video))
+        generator.maximumSize = CGSize(width: 960, height: 960)
+        generator.appliesPreferredTrackTransform = true
+        let (poster, _) = try await generator.image(at: .zero)
+        let posterURL = thumbnails.appendingPathComponent("\(id.uuidString).jpg")
+        guard let destination = CGImageDestinationCreateWithURL(posterURL as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        CGImageDestinationAddImage(destination, poster, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
+        try await GIFExporter.export(video, duration: duration, to: thumbnails.appendingPathComponent("\(id.uuidString).gif"),
+                                     fps: 8, maxWidth: 480, maxDuration: 10)
     }
 
     private static func encode(_ image: CGImage, to url: URL, type: UTType, quality: Double?) -> Bool {

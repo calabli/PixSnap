@@ -29,6 +29,18 @@ final class AppSettings {
 
     static let captureDelayChoices = [3, 5, 10]
 
+    /// Frames per second for screen recordings.
+    var recordingFPS: Int {
+        didSet { defaults.set(recordingFPS, forKey: Keys.recordingFPS) }
+    }
+
+    static let recordingFPSChoices = [30, 60]
+
+    /// Whether recordings show the mouse pointer (on by default).
+    var recordsCursor: Bool {
+        didSet { defaults.set(recordsCursor, forKey: Keys.recordsCursor) }
+    }
+
     /// Shadow and background for window captures.
     var windowCaptureStyle: WindowCaptureStyle {
         didSet { if let data = try? JSONEncoder().encode(windowCaptureStyle) { defaults.set(data, forKey: Keys.windowCaptureStyle) } }
@@ -82,6 +94,8 @@ final class AppSettings {
         static let captureShortcuts = "captureShortcuts"
         static let captureDelay = "captureDelay"
         static let windowCaptureStyle = "windowCaptureStyle"
+        static let recordingFPS = "recordingFPS"
+        static let recordsCursor = "recordsCursor"
         static let copiesAfterCapture = "copiesAfterCapture"
         static let saveFolderPath = "saveFolderPath"
         static let asksWhereToSave = "asksWhereToSave"
@@ -105,6 +119,9 @@ final class AppSettings {
         self.shortcuts = shortcuts
         let delay = defaults.integer(forKey: Keys.captureDelay)
         captureDelay = Self.captureDelayChoices.contains(delay) ? delay : 3
+        let fps = defaults.integer(forKey: Keys.recordingFPS)
+        recordingFPS = Self.recordingFPSChoices.contains(fps) ? fps : 30
+        recordsCursor = defaults.object(forKey: Keys.recordsCursor) as? Bool ?? true
         windowCaptureStyle = defaults.data(forKey: Keys.windowCaptureStyle)
             .flatMap { try? JSONDecoder().decode(WindowCaptureStyle.self, from: $0) } ?? .default
         copiesAfterCapture = defaults.bool(forKey: Keys.copiesAfterCapture)

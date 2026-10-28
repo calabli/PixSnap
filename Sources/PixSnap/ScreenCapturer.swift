@@ -115,6 +115,23 @@ final class ScreenCapturer {
         try await captureRegion(screen.frame, on: screen)
     }
 
+    /// A recorder for `rect` (global AppKit coordinates, inside `screen`), leaving PixSnap's own
+    /// windows out.
+    func makeRecorder(for rect: CGRect, on screen: NSScreen, fps: Int, showsCursor: Bool) async throws -> ScreenRecorder {
+        var content = try await contentForCapture()
+        if ownApplication == nil || !content.displays.contains(where: { $0.displayID == screen.displayID }) {
+            content = try await freshContent()
+        }
+        guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        let filter = SCContentFilter(display: display, excludingApplications: ownApplication.map { [$0] } ?? [], exceptingWindows: [])
+        let sourceRect = CGRect(x: rect.minX - screen.frame.minX, y: screen.frame.maxY - rect.maxY, width: rect.width, height: rect.height)
+        return try ScreenRecorder(filter: filter, sourceRect: sourceRect,
+                                  pixelSize: recordingPixelSize(points: rect.size, scale: screen.backingScaleFactor),
+                                  fps: fps, showsCursor: showsCursor)
+    }
+
     /// Captures one window by itself: nothing in front of or behind it, on transparency. The capture
     /// covers only the window's frame, so its shadow is added afterwards (`WindowBackdrop`).
     /// Returns the image and its pixels per point.

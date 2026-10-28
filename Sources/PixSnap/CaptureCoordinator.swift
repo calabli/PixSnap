@@ -19,6 +19,10 @@ final class CaptureCoordinator {
     private var selectsScrollingRegion = false
     /// The selection is for a delayed capture: the region is taken when the countdown ends.
     private var selectsDelayedRegion = false
+    /// The selection is for a screen recording.
+    private var selectsRecordingRegion = false
+    private var recording: RecordingSession?
+    private var recordingResults: [RecordingResultWindow] = []
     private var scrollSession: ScrollCaptureSession?
 
     init() {
@@ -75,9 +79,18 @@ final class CaptureCoordinator {
         HistoryLibrary.shared.add(capture, sourceApp: NSWorkspace.shared.frontmostApplication)
     }
 
-    /// Floats a capture from history in the middle of the screen under the cursor.
+    /// Floats a capture from history in the middle of the screen under the cursor; a recording
+    /// opens in its player.
     func pinHistoryEntry(_ entry: HistoryEntry) {
         let mouse = NSEvent.mouseLocation
+        if let duration = entry.recordingDuration {
+            guard let video = HistoryLibrary.shared.videoURL(for: entry),
+                  let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }
+            let size = CGSize(width: CGFloat(entry.pixelWidth) / entry.scale, height: CGFloat(entry.pixelHeight) / entry.scale)
+            showRecording(video, duration: duration, pixelSize: CGSize(width: entry.pixelWidth, height: entry.pixelHeight),
+                          near: ScreenGeometry.centered(size, in: screen.visibleFrame), on: screen)
+            return
+        }
         guard let capture = HistoryLibrary.shared.loadCapture(entry),
               let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main
         else { return }
@@ -195,6 +208,60 @@ final class CaptureCoordinator {
         window.start()
     }
 
+    /// Starts a screen recording (select a region or click a window first), or stops the one running.
+    func toggleRecording() {
+        if let recording {
+            recording.stop()
+            return
+        }
+        guard !isCapturing else { return }
+        selectsRecordingRegion = true
+        startCapture()
+        if !isCapturing { selectsRecordingRegion = false }
+    }
+
+    private func startRecording(in region: CGRect, on screen: NSScreen) {
+        let session = RecordingSession(region: region, on: screen)
+        let sourceApp = NSWorkspace.shared.frontmostApplication
+        session.onFinish = { [weak self] result in
+            self?.recording = nil
+            guard let self, let (url, duration) = result else { return }
+            let size = recordingPixelSize(points: region.size, scale: screen.backingScaleFactor)
+            // Into history (and onto the clothesline) like a screenshot.
+            let entry = HistoryLibrary.shared.addRecording(url, duration: duration, pixelSize: size, scale: screen.backingScaleFactor,
+                                                           sourceApp: sourceApp)
+            let video = entry.flatMap { HistoryLibrary.shared.videoURL(for: $0) } ?? url
+            showRecording(video, duration: duration, pixelSize: size, near: region, on: screen)
+        }
+        recording = session
+        Task { await session.start() }
+    }
+
+    private func showRecording(_ video: URL, duration: Double, pixelSize: CGSize, near region: CGRect, on screen: NSScreen) {
+        let window = RecordingResultWindow(video: video, duration: duration, pixelSize: pixelSize, near: region, on: screen)
+        window.onClosed = { [weak self] closed in self?.recordingResults.removeAll { $0 === closed } }
+        recordingResults.append(window)
+        window.orderFrontRegardless()
+    }
+
+    /// Development: records `region` (global AppKit coordinates) for `seconds` without selecting it,
+    /// and if `gif` is given, also exports the result there.
+    func startRecording(of region: CGRect, for seconds: Double, gif: URL?) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(region) }) else { return }
+        startRecording(in: region, on: screen)
+        if let gif, let session = recording {
+            let show = session.onFinish
+            session.onFinish = { result in
+                show(result)
+                guard let (url, duration) = result else { return }
+                Task {
+                    do { try await GIFExporter.export(url, duration: duration, to: gif) } catch { NSLog("PixSnap GIF export failed: \(error)") }
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in self?.recording?.stop() }
+    }
+
     /// The window under the cursor, by itself.
     func startWindowCapture() {
         guard !isCapturing, PermissionGuide.ensureScreenCapture() else { return }
@@ -307,7 +374,7 @@ final class CaptureCoordinator {
         window.selectionView.onSelect = { [weak self] rect in self?.finish(frozen: frozen, viewRect: rect) }
         // A clicked window is captured by itself, unless this selection is for a long screenshot or a
         // delayed capture, where its frame is just the region.
-        if !selectsScrollingRegion, !selectsDelayedRegion {
+        if !selectsScrollingRegion, !selectsDelayedRegion, !selectsRecordingRegion {
             window.selectionView.onSelectWindow = { [weak self] index in
                 guard let self else { return }
                 let sourceApp = previousApp
@@ -350,16 +417,19 @@ final class CaptureCoordinator {
         )
         // The app that was in front when the capture started, recorded in history ("微信", "Figma"…).
         let sourceApp = previousApp
-        let scrolling = selectsScrollingRegion, delayed = selectsDelayedRegion
+        let scrolling = selectsScrollingRegion, delayed = selectsDelayedRegion, recording = selectsRecordingRegion
         endSession()
         let scale = frozen.screen.backingScaleFactor
-        if scrolling || delayed {
+        if scrolling || delayed || recording {
             let screenFrame = frozen.screen.frame
             let region = CGRect(x: screenFrame.minX + pixelRect.minX / scale, y: screenFrame.minY + screenFrame.height - pixelRect.maxY / scale,
                                 width: pixelRect.width / scale, height: pixelRect.height / scale).integral
             if scrolling {
                 guard region.width >= 20, region.height >= 40 else { return }
                 startScrolling(in: region, on: frozen.screen, sourceApp: sourceApp)
+            } else if recording {
+                guard region.width >= 16, region.height >= 16 else { return }
+                startRecording(in: region, on: frozen.screen)
             } else {
                 guard region.width >= 1, region.height >= 1 else { return }
                 startCountdown(over: region, on: frozen.screen, sourceApp: sourceApp)
@@ -445,6 +515,7 @@ final class CaptureCoordinator {
         isCapturing = false
         selectsScrollingRegion = false
         selectsDelayedRegion = false
+        selectsRecordingRegion = false
         previousApp?.activate()
         previousApp = nil
     }

@@ -135,7 +135,7 @@ final class NotchWindow: NSPanel {
         case 49: // space
             if preview.entry != nil {
                 preview.dismiss()
-            } else if let entry = clothesline.hoveredEntry ?? clothesline.entries.last {
+            } else if let entry = clothesline.hoveredEntry ?? clothesline.newestEntry {
                 preview.show(entry, from: clothesline.screenRect(of: entry))
             }
         case 123, 124: // ← →
@@ -150,7 +150,7 @@ final class NotchWindow: NSPanel {
     /// Previews the newest photo without a key press (`--clothesline --preview`), after the lines settle.
     func previewNewest() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            guard let self, case .open = self.phase, let entry = self.clothesline.entries.last else { return }
+            guard let self, case .open = self.phase, let entry = self.clothesline.newestEntry else { return }
             self.preview.show(entry, from: self.clothesline.screenRect(of: entry))
         }
     }
@@ -265,7 +265,8 @@ final class NotchWindow: NSPanel {
 
     private func hang(_ plan: ClotheslineView.Plan, emptyMessage: String) {
         clothesline.show(plan, style: AppSettings.shared.ropeStyle,
-                         image: { HistoryLibrary.shared.image(for: $0, pixelSize: $1) }, emptyMessage: emptyMessage)
+                         image: { HistoryLibrary.shared.image(for: $0, pixelSize: $1) },
+                         moving: { HistoryLibrary.shared.movingThumbnail(for: $0) }, emptyMessage: emptyMessage)
     }
 
     /// 0: the lines are tucked above the top of the screen; 1: hanging in place under the notch.
@@ -399,7 +400,7 @@ final class NotchWindow: NSPanel {
     /// Throws the newest photo without a key press (`--clothesline --throw`), after the lines settle.
     func throwNewest() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self, case .open = self.phase, let entry = self.clothesline.entries.last else { return }
+            guard let self, case .open = self.phase, let entry = self.clothesline.newestEntry else { return }
             self.release(entry, velocity: CGVector(dx: 0, dy: 40))
         }
     }
@@ -424,11 +425,17 @@ final class NotchWindow: NSPanel {
     /// The window's `ignoresMouseEvents` is never touched: setting it back to false makes AppKit
     /// stop letting clicks through the transparent parts, and this window covers the screen.
     private func dragOut(_ entry: HistoryEntry, from view: NSView, frame: CGRect, image: NSImage, event: NSEvent) {
-        guard let capture = HistoryLibrary.shared.loadCapture(entry) else { return }
-        CaptureDrag.begin(capture, image: image, from: frame, in: view, event: event) { [weak self] taken in
+        let ended: (Bool) -> Void = { [weak self] taken in
             guard let self else { return }
             preview.endDragOut()
             if !taken { openNow() }
+        }
+        if entry.isRecording {
+            guard let video = HistoryLibrary.shared.videoURL(for: entry) else { return }
+            CaptureDrag.begin(file: video, image: image, from: frame, in: view, event: event, ended: ended)
+        } else {
+            guard let capture = HistoryLibrary.shared.loadCapture(entry) else { return }
+            CaptureDrag.begin(capture, image: image, from: frame, in: view, event: event, ended: ended)
         }
         collapse()
     }

@@ -1,6 +1,6 @@
 import AppKit
 
-/// Drags a capture out to other apps as a PNG file: chat apps, mail, Finder, design tools all take
+/// Drags a capture out to other apps as a PNG file (a recording as its MP4): chat apps, mail, Finder, design tools all take
 /// a file URL, and the PNG data rides along for apps that only take images. The picture under the
 /// mouse shrinks to a handy size around the cursor, and slides back if nothing takes it.
 @MainActor
@@ -20,9 +20,15 @@ enum CaptureDrag {
             NSLog("PixSnap could not prepare a capture for dragging: \(error)")
             return
         }
+        begin(file: url, png: try? Data(contentsOf: url), image: image, from: frame, in: view, event: event, ended: ended)
+    }
+
+    /// Drags a file that already exists (a recording's MP4), looking like `image`.
+    static func begin(file url: URL, png: Data? = nil, image: NSImage, from frame: CGRect, in view: NSView, event: NSEvent,
+                      ended: @escaping (Bool) -> Void = { _ in }) {
         let item = NSPasteboardItem()
         item.setString(url.absoluteString, forType: .fileURL)
-        if let png = try? Data(contentsOf: url) { item.setData(png, forType: .png) }
+        if let png { item.setData(png, forType: .png) }
 
         let dragging = NSDraggingItem(pasteboardWriter: item)
         // A smaller copy, centered where the mouse holds the picture.

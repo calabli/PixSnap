@@ -125,5 +125,18 @@ final class HistoryDatabaseTests: XCTestCase {
         XCTAssertEqual(try database.entry(id: loved.id)?.isFavorite, false)
         XCTAssertEqual(try database.favoriteCount(), 1)
     }
+
+    func testKeepsRecordingsWithTheirLength() throws {
+        let database = try HistoryDatabase(url: databaseURL)
+        var recording = entry(minutesAgo: 1)
+        recording.recordingDuration = 12.5
+        let screenshot = entry(minutesAgo: 2)
+        try [recording, screenshot].forEach(database.insert)
+        XCTAssertEqual(try database.entry(id: recording.id)?.recordingDuration, 12.5)
+        XCTAssertEqual(try database.entry(id: recording.id)?.isRecording, true)
+        XCTAssertNil(try database.entry(id: screenshot.id)?.recordingDuration)
+        // A database from before recordings opens with them added.
+        XCTAssertEqual(try HistoryDatabase(url: databaseURL).recent(limit: 5).map(\.id), [recording.id, screenshot.id])
+    }
 }
 #endif
