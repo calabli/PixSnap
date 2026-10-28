@@ -176,10 +176,11 @@ private final class SendableStitcher: @unchecked Sendable {
     }
 }
 
-/// The outline around the region, with the rest of the screen dimmed. It never takes the mouse,
-/// so scrolling reaches the app underneath.
+/// The outline around a region being captured (a long screenshot, a delayed capture), with the
+/// rest of the screen dimmed. It never takes the mouse, so scrolling, clicks and hovering reach
+/// the apps underneath; and it's PixSnap's, so it's never in the capture.
 @MainActor
-private final class RegionFrameWindow: NSPanel {
+final class RegionFrameWindow: NSPanel {
     init(region: CGRect, screen: NSScreen) {
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         level = .screenSaver

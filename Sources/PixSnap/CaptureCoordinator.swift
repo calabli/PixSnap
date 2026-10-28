@@ -17,6 +17,8 @@ final class CaptureCoordinator {
     private var screenObserver: NSObjectProtocol?
     /// The selection is for a long screenshot rather than a plain capture.
     private var selectsScrollingRegion = false
+    /// The selection is for a delayed capture: the region is taken when the countdown ends.
+    private var selectsDelayedRegion = false
     private var scrollSession: ScrollCaptureSession?
 
     init() {
@@ -152,18 +154,44 @@ final class CaptureCoordinator {
 
     private var countdown: CountdownWindow?
 
-    /// A countdown first, so a menu or hover state can be set up, then select a region as usual.
+    /// Select a region first; it stays outlined while a countdown runs beside it (time to open a
+    /// menu, hover something, or let an animation get there), then what's in it right then is
+    /// captured.
     func startDelayedCapture() {
         guard !isCapturing, countdown == nil else { return }
-        let mouse = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }
-        let window = CountdownWindow(seconds: AppSettings.shared.captureDelay, on: screen)
+        selectsDelayedRegion = true
+        startCapture()
+        if !isCapturing { selectsDelayedRegion = false }
+    }
+
+    /// Development: a delayed capture of `region` (global AppKit coordinates) without selecting it.
+    func startDelayedCapture(of region: CGRect) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(region) }) else { return }
+        startCountdown(over: region, on: screen, sourceApp: nil)
+    }
+
+    private func startCountdown(over region: CGRect, on screen: NSScreen, sourceApp: NSRunningApplication?) {
+        let outline = RegionFrameWindow(region: region, screen: screen)
+        let window = CountdownWindow(seconds: AppSettings.shared.captureDelay, beside: region, on: screen)
         window.onFinish = { [weak self] in
+            outline.orderOut(nil)
             self?.countdown = nil
-            self?.startCapture()
+            Task {
+                do {
+                    let image = try await ScreenCapturer.shared.captureRegion(region, on: screen)
+                    self?.keep(Capture(image: image, scale: screen.backingScaleFactor), sourceApp: sourceApp, at: region, on: screen)
+                } catch {
+                    NSLog("PixSnap delayed capture failed: \(error)")
+                    NSSound.beep()
+                }
+            }
         }
-        window.onCancel = { [weak self] in self?.countdown = nil }
+        window.onCancel = { [weak self] in
+            outline.orderOut(nil)
+            self?.countdown = nil
+        }
         countdown = window
+        outline.orderFrontRegardless()
         window.start()
     }
 
@@ -277,8 +305,9 @@ final class CaptureCoordinator {
         if isFirst { NSApp.activate() }
         let window = SelectionWindow(frozen: frozen, windowFrames: windows.map(\.frame))
         window.selectionView.onSelect = { [weak self] rect in self?.finish(frozen: frozen, viewRect: rect) }
-        // A clicked window is captured by itself, unless this selection is for a long screenshot.
-        if !selectsScrollingRegion {
+        // A clicked window is captured by itself, unless this selection is for a long screenshot or a
+        // delayed capture, where its frame is just the region.
+        if !selectsScrollingRegion, !selectsDelayedRegion {
             window.selectionView.onSelectWindow = { [weak self] index in
                 guard let self else { return }
                 let sourceApp = previousApp
@@ -321,15 +350,20 @@ final class CaptureCoordinator {
         )
         // The app that was in front when the capture started, recorded in history ("微信", "Figma"…).
         let sourceApp = previousApp
-        let scrolling = selectsScrollingRegion
+        let scrolling = selectsScrollingRegion, delayed = selectsDelayedRegion
         endSession()
         let scale = frozen.screen.backingScaleFactor
-        if scrolling {
+        if scrolling || delayed {
             let screenFrame = frozen.screen.frame
             let region = CGRect(x: screenFrame.minX + pixelRect.minX / scale, y: screenFrame.minY + screenFrame.height - pixelRect.maxY / scale,
-                                width: pixelRect.width / scale, height: pixelRect.height / scale)
-            guard region.width >= 20, region.height >= 40 else { return }
-            startScrolling(in: region, on: frozen.screen, sourceApp: sourceApp)
+                                width: pixelRect.width / scale, height: pixelRect.height / scale).integral
+            if scrolling {
+                guard region.width >= 20, region.height >= 40 else { return }
+                startScrolling(in: region, on: frozen.screen, sourceApp: sourceApp)
+            } else {
+                guard region.width >= 1, region.height >= 1 else { return }
+                startCountdown(over: region, on: frozen.screen, sourceApp: sourceApp)
+            }
             return
         }
         guard pixelRect.width >= 1, pixelRect.height >= 1,
@@ -410,6 +444,7 @@ final class CaptureCoordinator {
         overlays.removeAll()
         isCapturing = false
         selectsScrollingRegion = false
+        selectsDelayedRegion = false
         previousApp?.activate()
         previousApp = nil
     }

@@ -42,6 +42,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]), pinned: arguments.contains("--pinned"))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
+        // `--delayed-capture x,y,w,h`: the countdown and capture over that region (global AppKit coordinates).
+        if let flag = arguments.firstIndex(of: "--delayed-capture"), arguments.indices.contains(flag + 1) {
+            let numbers = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }
+            if numbers.count == 4 { coordinator.startDelayedCapture(of: CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3])) }
+        }
         // `--capture region|fullScreen|scrolling|delayed|window` starts that capture, as its shortcut would.
         if let flag = arguments.firstIndex(of: "--capture"), arguments.indices.contains(flag + 1),
            let action = CaptureAction(rawValue: arguments[flag + 1]) {

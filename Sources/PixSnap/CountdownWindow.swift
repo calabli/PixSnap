@@ -1,8 +1,9 @@
 import AppKit
 
-/// The delayed capture's countdown: a big number in the middle of the screen that ticks down, each
-/// second popping in. It never takes the mouse, so menus and hover states can be set up meanwhile;
-/// Esc (taken as a global shortcut while it runs) or a click on it cancels.
+/// The delayed capture's countdown: a big number beside the selected region that ticks down, each
+/// second popping in. It never takes the mouse and stays out of the region, so menus, hover states
+/// and animations can be set up in it meanwhile; Esc (taken as a global shortcut while it runs)
+/// cancels.
 @MainActor
 final class CountdownWindow: NSPanel {
     var onFinish: (() -> Void)?
@@ -16,10 +17,9 @@ final class CountdownWindow: NSPanel {
 
     private static let size = CGSize(width: 150, height: 150)
 
-    init(seconds: Int, on screen: NSScreen) {
+    init(seconds: Int, beside region: CGRect, on screen: NSScreen) {
         remaining = seconds
-        let frame = CGRect(x: screen.frame.midX - Self.size.width / 2, y: screen.frame.midY - Self.size.height / 2,
-                           width: Self.size.width, height: Self.size.height)
+        let frame = Self.place(beside: region, in: screen.visibleFrame)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         level = .screenSaver
         isOpaque = false
@@ -49,6 +49,22 @@ final class CountdownWindow: NSPanel {
         content.addSubview(number)
         content.addSubview(hint)
         contentView = content
+    }
+
+    /// To the right of the region, else left, below, above; vertically centered on it where it fits.
+    /// When the region fills the screen, in its top-right corner.
+    private static func place(beside region: CGRect, in visible: CGRect) -> CGRect {
+        let gap: CGFloat = 16
+        let middleY = min(max(region.midY - size.height / 2, visible.minY + 8), visible.maxY - size.height - 8)
+        let middleX = min(max(region.midX - size.width / 2, visible.minX + 8), visible.maxX - size.width - 8)
+        let candidates = [
+            CGRect(x: region.maxX + gap, y: middleY, width: size.width, height: size.height),
+            CGRect(x: region.minX - gap - size.width, y: middleY, width: size.width, height: size.height),
+            CGRect(x: middleX, y: region.minY - gap - size.height, width: size.width, height: size.height),
+            CGRect(x: middleX, y: region.maxY + gap, width: size.width, height: size.height),
+        ]
+        return candidates.first { visible.contains($0) }
+            ?? CGRect(x: region.maxX - size.width - gap, y: region.maxY - size.height - gap, width: size.width, height: size.height)
     }
 
     func start() {
@@ -82,7 +98,7 @@ final class CountdownWindow: NSPanel {
                                 duration: 0.35, bounce: 0.3), forKey: "pop")
     }
 
-    /// Gone before the screen is frozen, so it isn't in the screenshot.
+    /// Gone before the region is captured.
     private func finish() {
         stop()
         onFinish?()
