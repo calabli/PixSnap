@@ -4,15 +4,14 @@ import PixSnapCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
-    private var captureMenuItem: NSMenuItem?
     private let recentMenu = NSMenu()
     private var recentEntries: [UUID: HistoryEntry] = [:]
     private let coordinator = CaptureCoordinator()
-    private lazy var captureShortcut = CaptureShortcutService { [weak self] in self?.coordinator.startCapture() }
+    private lazy var captureShortcut = CaptureShortcutService { [weak self] action in self?.start(action) }
     private lazy var settingsWindow = SettingsWindowController(shortcutService: captureShortcut)
     private var benchmark: CaptureBenchmark?
-    /// ⌥⇧2 for a long screenshot.
-    private let scrollingHotKey = HotKey()
+    /// The menu items for each capture mode, to show their shortcuts.
+    private var captureMenuItems: [CaptureAction: NSMenuItem] = [:]
     private lazy var notch = NotchController { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -23,12 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         notch.rebuild()
         settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
 
-        captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItem() }
-        scrollingHotKey.onPress = { [weak self] in self?.coordinator.startScrollingCapture() }
-        _ = scrollingHotKey.register(.defaultScrollingCapture)
-        if !captureShortcut.start() {
+        captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItems() }
+        let taken = captureShortcut.start()
+        if !taken.isEmpty {
             let alert = NSAlert()
-            alert.messageText = "快捷键 \(captureShortcut.shortcut.displayString) 已被占用"
+            alert.messageText = "快捷键 " + taken.map { "\(captureShortcut.shortcut(for: $0).displayString)（\($0.title)）" }.joined(separator: "、") + " 已被占用"
             alert.informativeText = "其他应用正在使用这个快捷键。你可以在“设置”里换一个，或者从菜单栏图标开始截图。"
             alert.addButton(withTitle: "打开设置")
             alert.addButton(withTitle: "稍后")
@@ -44,6 +42,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]), pinned: arguments.contains("--pinned"))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
+        // `--capture region|fullScreen|scrolling|delayed|window` starts that capture, as its shortcut would.
+        if let flag = arguments.firstIndex(of: "--capture"), arguments.indices.contains(flag + 1),
+           let action = CaptureAction(rawValue: arguments[flag + 1]) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.start(action) }
+        }
         // `--clothesline` opens the clothesline; add `--preview` to also preview the newest photo,
         // `--basket` to open the laundry basket, or `--throw` to throw the newest photo into it.
         if arguments.contains("--clothesline") {
@@ -82,12 +85,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.image?.isTemplate = true
 
         let menu = NSMenu()
-        let capture = NSMenuItem(title: "截取区域", action: #selector(captureFromMenu), keyEquivalent: "")
-        menu.addItem(capture)
-        captureMenuItem = capture
-        let scrolling = NSMenuItem(title: "长截图", action: #selector(scrollingCaptureFromMenu), keyEquivalent: "2")
-        scrolling.keyEquivalentModifierMask = [.option, .shift]
-        menu.addItem(scrolling)
+        for action in CaptureAction.allCases {
+            let item = NSMenuItem(title: action.title, action: #selector(captureFromMenu(_:)), keyEquivalent: "")
+            item.representedObject = action.rawValue
+            menu.addItem(item)
+            captureMenuItems[action] = item
+        }
         let recent = NSMenuItem(title: "最近截图", action: nil, keyEquivalent: "")
         recentMenu.delegate = self
         recent.submenu = recentMenu
@@ -104,26 +107,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         item.menu = menu
         statusItem = item
-        refreshCaptureMenuItem()
+        refreshCaptureMenuItems()
     }
 
-    /// Shows the current shortcut next to the menu item: as a key equivalent when it's a single
+    /// Shows each mode's shortcut next to its menu item: as a key equivalent when it's a single
     /// character, otherwise in the title (F-keys, Space and arrows can't be menu key equivalents here).
-    private func refreshCaptureMenuItem() {
-        guard let item = captureMenuItem else { return }
-        let shortcut = captureShortcut.shortcut
-        if shortcut.keyLabel.count == 1 {
-            item.title = "截取区域"
-            item.keyEquivalent = shortcut.keyLabel.lowercased()
-            var mask: NSEvent.ModifierFlags = []
-            if shortcut.modifiers.contains(.command) { mask.insert(.command) }
-            if shortcut.modifiers.contains(.shift) { mask.insert(.shift) }
-            if shortcut.modifiers.contains(.option) { mask.insert(.option) }
-            if shortcut.modifiers.contains(.control) { mask.insert(.control) }
-            item.keyEquivalentModifierMask = mask
-        } else {
-            item.title = "截取区域（\(shortcut.displayString)）"
-            item.keyEquivalent = ""
+    private func refreshCaptureMenuItems() {
+        for (action, item) in captureMenuItems {
+            let shortcut = captureShortcut.shortcut(for: action)
+            if shortcut.keyLabel.count == 1 {
+                item.title = action.title
+                item.keyEquivalent = shortcut.keyLabel.lowercased()
+                var mask: NSEvent.ModifierFlags = []
+                if shortcut.modifiers.contains(.command) { mask.insert(.command) }
+                if shortcut.modifiers.contains(.shift) { mask.insert(.shift) }
+                if shortcut.modifiers.contains(.option) { mask.insert(.option) }
+                if shortcut.modifiers.contains(.control) { mask.insert(.control) }
+                item.keyEquivalentModifierMask = mask
+            } else {
+                item.title = "\(action.title)（\(shortcut.displayString)）"
+                item.keyEquivalent = ""
+            }
+        }
+    }
+
+    private func start(_ action: CaptureAction) {
+        switch action {
+        case .region: coordinator.startCapture()
+        case .fullScreen: coordinator.startFullScreenCapture()
+        case .scrolling: coordinator.startScrollingCapture()
+        case .delayed: coordinator.startDelayedCapture()
+        case .window: coordinator.startWindowCapture()
         }
     }
 
@@ -179,17 +193,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.pinHistoryEntry(entry)
     }
 
-    @objc private func scrollingCaptureFromMenu() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [coordinator] in
-            coordinator.startScrollingCapture()
-        }
-    }
-
-    @objc private func captureFromMenu() {
-        // Let the menu finish closing so it doesn't end up in the frozen screenshot.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [coordinator] in
-            coordinator.startCapture()
-        }
+    @objc private func captureFromMenu(_ item: NSMenuItem) {
+        guard let action = (item.representedObject as? String).flatMap(CaptureAction.init(rawValue:)) else { return }
+        // Let the menu finish closing so it doesn't end up in the screenshot.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.start(action) }
     }
 
     @objc private func openSaveFolder() {

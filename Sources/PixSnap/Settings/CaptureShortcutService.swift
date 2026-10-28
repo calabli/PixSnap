@@ -1,44 +1,60 @@
 import PixSnapCore
 
-/// Owns the global capture shortcut: registers the saved one, and lets Settings record a new one.
+/// Owns the global shortcuts, one per capture mode: registers the saved ones, and lets Settings
+/// record new ones.
 @MainActor
 final class CaptureShortcutService {
-    /// Called after the shortcut changed, so the menu can show it.
+    /// Called after a shortcut changed, so the menu can show it.
     var onChange: (() -> Void)?
 
-    private let hotKey = HotKey()
+    private var hotKeys: [CaptureAction: HotKey] = [:]
     private let settings: AppSettings
 
-    init(onPress: @escaping () -> Void) {
+    init(onPress: @escaping (CaptureAction) -> Void) {
         self.settings = .shared
-        hotKey.onPress = onPress
+        for action in CaptureAction.allCases {
+            let hotKey = HotKey()
+            hotKey.onPress = { onPress(action) }
+            hotKeys[action] = hotKey
+        }
     }
 
-    var shortcut: Shortcut { settings.captureShortcut }
+    func shortcut(for action: CaptureAction) -> Shortcut { settings.shortcut(for: action) }
 
-    /// Registers the saved shortcut. Returns false when another app owns it.
-    func start() -> Bool {
-        hotKey.register(settings.captureShortcut)
+    /// Registers the saved shortcuts. Returns the modes whose shortcut another app owns.
+    func start() -> [CaptureAction] {
+        CaptureAction.allCases.filter { !(hotKeys[$0]?.register(shortcut(for: $0)) ?? false) }
     }
 
     /// While recording, the old shortcut must not fire, or pressing it again couldn't be recorded.
-    func suspend() {
-        hotKey.unregister()
+    func suspend(_ action: CaptureAction) {
+        hotKeys[action]?.unregister()
     }
 
-    func resume() {
-        _ = hotKey.register(settings.captureShortcut)
+    func resume(_ action: CaptureAction) {
+        _ = hotKeys[action]?.register(shortcut(for: action))
     }
 
-    /// Switches to `shortcut` and saves it. When it can't be registered, the old one is restored
-    /// and false is returned.
-    func change(to shortcut: Shortcut) -> Bool {
-        guard hotKey.register(shortcut) else {
-            resume()
-            return false
+    enum ChangeError: Error {
+        /// Another capture mode already uses it.
+        case usedBy(CaptureAction)
+        /// Another app owns it.
+        case taken
+    }
+
+    /// Switches `action` to `shortcut` and saves it. When that can't be done, the old one is
+    /// restored and the reason returned.
+    func change(_ action: CaptureAction, to shortcut: Shortcut) -> ChangeError? {
+        if let other = CaptureAction.allCases.first(where: { $0 != action && self.shortcut(for: $0) == shortcut }) {
+            resume(action)
+            return .usedBy(other)
         }
-        settings.captureShortcut = shortcut
+        guard hotKeys[action]?.register(shortcut) ?? false else {
+            resume(action)
+            return .taken
+        }
+        settings.shortcuts[action] = shortcut
         onChange?()
-        return true
+        return nil
     }
 }

@@ -75,26 +75,31 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("快捷键") {
-                LabeledContent("截取区域") {
-                    HStack {
-                        Button {
-                            recorder.isRecording ? recorder.cancel() : recorder.start()
-                        } label: {
-                            Text(recorder.isRecording ? "请按下新的快捷键…" : settings.captureShortcut.displayString)
-                                .frame(minWidth: 130)
+                ForEach(CaptureAction.allCases, id: \.self) { action in
+                    LabeledContent(action.title) {
+                        HStack {
+                            Button {
+                                recorder.recording == action ? recorder.cancel() : recorder.start(action)
+                            } label: {
+                                Text(recorder.recording == action ? "请按下新的快捷键…" : settings.shortcut(for: action).displayString)
+                                    .frame(minWidth: 130)
+                            }
+                            .help(recorder.recording == action ? "按 Esc 取消" : "点击后按下新的快捷键")
+                            Button("恢复默认") { recorder.resetToDefault(action) }
+                                .disabled(settings.shortcut(for: action) == action.defaultShortcut)
                         }
-                        .help(recorder.isRecording ? "按 Esc 取消" : "点击后按下新的快捷键")
-                        Button("恢复默认") { recorder.resetToDefault() }
-                            .disabled(settings.captureShortcut == .defaultCapture)
                     }
-                }
-                if let message = recorder.message {
-                    Text(message).font(.callout).foregroundStyle(.red)
+                    if let message = recorder.message, message.action == action {
+                        Text(message.text).font(.callout).foregroundStyle(.red)
+                    }
                 }
             }
 
             Section("截图") {
                 Toggle("截图后自动复制到剪贴板", isOn: $settings.copiesAfterCapture)
+                Picker("延时截图倒计时", selection: $settings.captureDelay) {
+                    ForEach(AppSettings.captureDelayChoices, id: \.self) { Text("\($0) 秒").tag($0) }
+                }
                 Toggle("点“保存”时选择保存位置", isOn: $settings.asksWhereToSave)
                     .help("关闭后，点“保存”直接存进下面的文件夹")
                 LabeledContent(settings.asksWhereToSave ? "默认位置" : "保存位置") {
@@ -145,6 +150,18 @@ struct SettingsView: View {
                 Text("会删除 \(history.count) 张截图，包括收藏的，无法恢复。已经保存到“保存位置”的文件不受影响。")
             }
 
+            Section("窗口截图") {
+                Toggle("保留窗口阴影", isOn: $settings.windowCaptureStyle.keepsShadow)
+                Picker("背景", selection: $settings.windowCaptureStyle.background) {
+                    ForEach(WindowCaptureStyle.Background.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                HStack {
+                    Text("单击选区里高亮的窗口，或按“截取窗口”的快捷键截取鼠标下的窗口；只截这个窗口，不会带上挡在前面的其他窗口。")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+
             RopeStyleSection(style: $settings.ropeStyle)
 
             Section("通用") {
@@ -173,8 +190,8 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 500)
-        .fixedSize(horizontal: false, vertical: true)
+        // Taller than most screens now, so it scrolls.
+        .frame(width: 500, height: 720)
     }
 
     private func chooseSaveFolder() {

@@ -10,8 +10,28 @@ import ServiceManagement
 final class AppSettings {
     static let shared = AppSettings()
 
-    var captureShortcut: Shortcut {
-        didSet { save(captureShortcut, forKey: Keys.captureShortcut) }
+    /// Each capture mode's global shortcut.
+    var shortcuts: [CaptureAction: Shortcut] {
+        didSet { saveShortcuts() }
+    }
+
+    /// Region capture's shortcut, the one most places mention.
+    var captureShortcut: Shortcut { shortcut(for: .region) }
+
+    func shortcut(for action: CaptureAction) -> Shortcut {
+        shortcuts[action] ?? action.defaultShortcut
+    }
+
+    /// Seconds of countdown before a delayed capture.
+    var captureDelay: Int {
+        didSet { defaults.set(captureDelay, forKey: Keys.captureDelay) }
+    }
+
+    static let captureDelayChoices = [3, 5, 10]
+
+    /// Shadow and background for window captures.
+    var windowCaptureStyle: WindowCaptureStyle {
+        didSet { if let data = try? JSONEncoder().encode(windowCaptureStyle) { defaults.set(data, forKey: Keys.windowCaptureStyle) } }
     }
 
     var copiesAfterCapture: Bool {
@@ -57,7 +77,11 @@ final class AppSettings {
     private let defaults: UserDefaults
 
     private enum Keys {
+        /// The region shortcut from before there were several.
         static let captureShortcut = "captureShortcut"
+        static let captureShortcuts = "captureShortcuts"
+        static let captureDelay = "captureDelay"
+        static let windowCaptureStyle = "windowCaptureStyle"
         static let copiesAfterCapture = "copiesAfterCapture"
         static let saveFolderPath = "saveFolderPath"
         static let asksWhereToSave = "asksWhereToSave"
@@ -70,8 +94,19 @@ final class AppSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        captureShortcut = defaults.data(forKey: Keys.captureShortcut)
-            .flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) } ?? .defaultCapture
+        var shortcuts: [CaptureAction: Shortcut] = [:]
+        if let data = defaults.data(forKey: Keys.captureShortcuts),
+           let stored = try? JSONDecoder().decode([String: Shortcut].self, from: data) {
+            for (key, shortcut) in stored { if let action = CaptureAction(rawValue: key) { shortcuts[action] = shortcut } }
+        } else if let data = defaults.data(forKey: Keys.captureShortcut),
+                  let region = try? JSONDecoder().decode(Shortcut.self, from: data) {
+            shortcuts[.region] = region
+        }
+        self.shortcuts = shortcuts
+        let delay = defaults.integer(forKey: Keys.captureDelay)
+        captureDelay = Self.captureDelayChoices.contains(delay) ? delay : 3
+        windowCaptureStyle = defaults.data(forKey: Keys.windowCaptureStyle)
+            .flatMap { try? JSONDecoder().decode(WindowCaptureStyle.self, from: $0) } ?? .default
         copiesAfterCapture = defaults.bool(forKey: Keys.copiesAfterCapture)
         saveFolder = defaults.string(forKey: Keys.saveFolderPath)
             .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? Self.defaultSaveFolder
@@ -104,7 +139,8 @@ final class AppSettings {
         launchAtLoginStatus = SMAppService.mainApp.status
     }
 
-    private func save(_ shortcut: Shortcut, forKey key: String) {
-        if let data = try? JSONEncoder().encode(shortcut) { defaults.set(data, forKey: key) }
+    private func saveShortcuts() {
+        let stored = Dictionary(uniqueKeysWithValues: shortcuts.map { ($0.key.rawValue, $0.value) })
+        if let data = try? JSONEncoder().encode(stored) { defaults.set(data, forKey: Keys.captureShortcuts) }
     }
 }

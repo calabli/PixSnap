@@ -110,6 +110,31 @@ final class ScreenCapturer {
         refreshInBackground()
     }
 
+    /// Captures all of `screen` at full resolution, leaving PixSnap's own windows out.
+    func captureDisplay(_ screen: NSScreen) async throws -> CGImage {
+        try await captureRegion(screen.frame, on: screen)
+    }
+
+    /// Captures one window by itself: nothing in front of or behind it, on transparency. The capture
+    /// covers only the window's frame, so its shadow is added afterwards (`WindowBackdrop`).
+    /// Returns the image and its pixels per point.
+    func captureWindow(_ id: CGWindowID) async throws -> (image: CGImage, scale: CGFloat) {
+        var content = try await contentForCapture()
+        if !content.windows.contains(where: { $0.windowID == id }) { content = try await freshContent() }
+        guard let window = content.windows.first(where: { $0.windowID == id }) else { throw CocoaError(.fileNoSuchFile) }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let configuration = SCStreamConfiguration()
+        let scale = CGFloat(filter.pointPixelScale)
+        configuration.width = Int((filter.contentRect.width * scale).rounded())
+        configuration.height = Int((filter.contentRect.height * scale).rounded())
+        configuration.showsCursor = false
+        configuration.captureResolution = .best
+        configuration.ignoreShadowsSingleWindow = true
+        configuration.shouldBeOpaque = false
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        return (image, scale)
+    }
+
     /// Captures `rect` (global AppKit coordinates, inside `screen`) at the screen's full
     /// resolution, leaving PixSnap's own windows out. Used over and over by long screenshots.
     func captureRegion(_ rect: CGRect, on screen: NSScreen) async throws -> CGImage {

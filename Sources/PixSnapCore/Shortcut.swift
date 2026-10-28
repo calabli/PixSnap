@@ -24,8 +24,6 @@ public struct Shortcut: Codable, Hashable, Sendable {
 
     /// ⌘⇧2 — 19 is the "2" key on macOS.
     public static let defaultCapture = Shortcut(keyCode: 19, modifiers: [.command, .shift], keyLabel: "2")
-    /// ⌥⇧2: the long screenshot, next to the regular one.
-    public static let defaultScrollingCapture = Shortcut(keyCode: 19, modifiers: [.option, .shift], keyLabel: "2")
 
     /// Symbols in the conventional macOS order: ⌃⌥⇧⌘, then the key.
     public var displayString: String {

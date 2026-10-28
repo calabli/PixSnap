@@ -46,6 +46,8 @@ final class SelectionWindow: NSWindow {
 @MainActor
 final class SelectionView: NSView {
     var onSelect: ((CGRect) -> Void)?
+    /// A highlighted window was clicked: its index in the window list this view was given.
+    var onSelectWindow: ((Int) -> Void)?
     var onCancel: (() -> Void)?
 
     private let frozenImage: CGImage
@@ -168,7 +170,11 @@ final class SelectionView: NSView {
         if let selection {
             onSelect?(selection)
         } else if let hoveredWindow {
-            onSelect?(hoveredWindow)
+            if let onSelectWindow, let index = windowRects.firstIndex(where: { $0.contains(mouse) }) {
+                onSelectWindow(index)
+            } else {
+                onSelect?(hoveredWindow)
+            }
         }
     }
 

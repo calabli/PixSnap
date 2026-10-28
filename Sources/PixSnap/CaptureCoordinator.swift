@@ -1,5 +1,6 @@
 import AppKit
 import PixSnapCore
+import PixSnapRender
 
 /// Runs one capture: freeze every screen, let the user select, then pin the result on screen.
 @MainActor
@@ -102,7 +103,7 @@ final class CaptureCoordinator {
         let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
         showOverlay(
             for: FrozenScreen(screen: screen, image: capture.image),
-            windowFrames: WindowDetector.visibleWindowFrames(primaryScreenHeight: primaryHeight),
+            windows: WindowDetector.visibleWindows(primaryScreenHeight: primaryHeight),
             isFirst: true,
             timing: CaptureTiming()
         )
@@ -127,6 +128,99 @@ final class CaptureCoordinator {
         startCapture(timing: CaptureTiming())
     }
 
+    /// The whole screen under the cursor, at once.
+    func startFullScreenCapture() {
+        guard !isCapturing, PermissionGuide.ensureScreenCapture() else { return }
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }
+        let sourceApp = NSWorkspace.shared.frontmostApplication
+        Task {
+            do {
+                let image = try await ScreenCapturer.shared.captureDisplay(screen)
+                let capture = Capture(image: image, scale: screen.backingScaleFactor)
+                // Floated at half size in the middle, so it doesn't look like the screen itself.
+                let visible = screen.visibleFrame
+                let fit = min(0.5, (visible.width - 80) / capture.pointSize.width, (visible.height - 80) / capture.pointSize.height)
+                let size = CGSize(width: (capture.pointSize.width * fit).rounded(), height: (capture.pointSize.height * fit).rounded())
+                keep(capture, sourceApp: sourceApp, at: ScreenGeometry.centered(size, in: visible), on: screen)
+            } catch {
+                NSLog("PixSnap full-screen capture failed: \(error)")
+                PermissionGuide.showScreenCaptureAlert()
+            }
+        }
+    }
+
+    private var countdown: CountdownWindow?
+
+    /// A countdown first, so a menu or hover state can be set up, then select a region as usual.
+    func startDelayedCapture() {
+        guard !isCapturing, countdown == nil else { return }
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }
+        let window = CountdownWindow(seconds: AppSettings.shared.captureDelay, on: screen)
+        window.onFinish = { [weak self] in
+            self?.countdown = nil
+            self?.startCapture()
+        }
+        window.onCancel = { [weak self] in self?.countdown = nil }
+        countdown = window
+        window.start()
+    }
+
+    /// The window under the cursor, by itself.
+    func startWindowCapture() {
+        guard !isCapturing, PermissionGuide.ensureScreenCapture() else { return }
+        guard let target = WindowDetector.window(at: NSEvent.mouseLocation) else {
+            NSSound.beep()
+            return
+        }
+        let sourceApp = NSRunningApplication(processIdentifier: Self.ownerPID(of: target.id) ?? 0)
+        captureWindow(target.id, frame: target.frame, sourceApp: sourceApp)
+    }
+
+    private static func ownerPID(of window: CGWindowID) -> pid_t? {
+        let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, window) as? [[String: Any]]
+        return info?.first?[kCGWindowOwnerPID as String] as? pid_t
+    }
+
+    /// Captures one window by itself, finished the way Settings says (shadow, background), and
+    /// floats it centered where the window is.
+    private func captureWindow(_ id: CGWindowID, frame: CGRect, sourceApp: NSRunningApplication?) {
+        let style = AppSettings.shared.windowCaptureStyle
+        // The screen showing most of the window.
+        func overlap(_ screen: NSScreen) -> CGFloat {
+            let shared = screen.frame.intersection(frame)
+            return shared.isNull ? 0 : shared.width * shared.height
+        }
+        let screen = NSScreen.screens.max { overlap($0) < overlap($1) } ?? NSScreen.main
+        Task {
+            do {
+                let (image, scale) = try await ScreenCapturer.shared.captureWindow(id)
+                let finished = WindowBackdrop.render(image, scale: scale, background: style.background, shadow: style.keepsShadow) ?? image
+                let capture = Capture(image: finished, scale: scale)
+                guard let screen else { return }
+                let visible = screen.visibleFrame
+                let fit = min(1, (visible.width - 40) / capture.pointSize.width, (visible.height - 60) / capture.pointSize.height)
+                let size = CGSize(width: (capture.pointSize.width * fit).rounded(), height: (capture.pointSize.height * fit).rounded())
+                var origin = CGPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2)
+                origin.x = min(max(origin.x, visible.minX + 10), visible.maxX - size.width - 10)
+                origin.y = min(max(origin.y, visible.minY + 50), visible.maxY - size.height - 10)
+                keep(capture, sourceApp: sourceApp, at: CGRect(origin: origin, size: size), on: screen)
+            } catch {
+                NSLog("PixSnap window capture failed: \(error)")
+                NSSound.beep()
+            }
+        }
+    }
+
+    /// What every finished capture goes through: copied if Settings says so, kept in history,
+    /// and floated at `frame`.
+    private func keep(_ capture: Capture, sourceApp: NSRunningApplication?, at frame: CGRect, on screen: NSScreen) {
+        if AppSettings.shared.copiesAfterCapture { ImageExporter.copyToPasteboard(capture) }
+        let entry = HistoryLibrary.shared.add(capture, sourceApp: sourceApp)
+        pin(capture, at: frame, on: screen, historyID: entry?.id)
+    }
+
     /// A long screenshot: select the region as usual, then scroll its content while PixSnap
     /// stitches it together.
     func startScrollingCapture() {
@@ -148,7 +242,7 @@ final class CaptureCoordinator {
         // The window list is read on another thread while the screens are being captured.
         let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
         let windowList = Task.detached(priority: .userInitiated) {
-            WindowDetector.visibleWindowFrames(primaryScreenHeight: primaryHeight)
+            WindowDetector.visibleWindows(primaryScreenHeight: primaryHeight)
         }
 
         sessionID += 1
@@ -164,7 +258,7 @@ final class CaptureCoordinator {
                     let windowFrames = await windowList.value
                     // Esc, a finished selection or a newer capture: drop screens that arrive late.
                     guard isCapturing, sessionID == session else { return }
-                    showOverlay(for: frozen, windowFrames: windowFrames, isFirst: !shownAny, timing: timing)
+                    showOverlay(for: frozen, windows: windowFrames, isFirst: !shownAny, timing: timing)
                     shownAny = true
                 }
                 if !shownAny, sessionID == session { isCapturing = false }
@@ -179,10 +273,19 @@ final class CaptureCoordinator {
 
     /// Shows the overlay for one screen as soon as its image is ready; the screen under the cursor is
     /// captured first, so that's normally the first to appear.
-    private func showOverlay(for frozen: FrozenScreen, windowFrames: [CGRect], isFirst: Bool, timing: CaptureTiming) {
+    private func showOverlay(for frozen: FrozenScreen, windows: [(id: CGWindowID, frame: CGRect)], isFirst: Bool, timing: CaptureTiming) {
         if isFirst { NSApp.activate() }
-        let window = SelectionWindow(frozen: frozen, windowFrames: windowFrames)
+        let window = SelectionWindow(frozen: frozen, windowFrames: windows.map(\.frame))
         window.selectionView.onSelect = { [weak self] rect in self?.finish(frozen: frozen, viewRect: rect) }
+        // A clicked window is captured by itself, unless this selection is for a long screenshot.
+        if !selectsScrollingRegion {
+            window.selectionView.onSelectWindow = { [weak self] index in
+                guard let self else { return }
+                let sourceApp = previousApp
+                endSession()
+                captureWindow(windows[index].id, frame: windows[index].frame, sourceApp: sourceApp)
+            }
+        }
         window.selectionView.onCancel = { [weak self] in self?.endSession() }
         window.orderFrontRegardless()
         overlays.append(window)

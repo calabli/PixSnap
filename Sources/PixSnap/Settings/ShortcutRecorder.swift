@@ -2,13 +2,14 @@ import AppKit
 import Observation
 import PixSnapCore
 
-/// Records a new capture shortcut from the next key press in the Settings window.
+/// Records a new shortcut for one capture mode from the next key press in the Settings window.
 @MainActor
 @Observable
 final class ShortcutRecorder {
-    private(set) var isRecording = false
-    /// Why the last key press wasn't accepted, shown under the recorder.
-    private(set) var message: String?
+    /// The mode being recorded, if any.
+    private(set) var recording: CaptureAction?
+    /// Why the last key press wasn't accepted, and for which mode, shown under its row.
+    private(set) var message: (action: CaptureAction, text: String)?
 
     @ObservationIgnored private var monitor: Any?
     @ObservationIgnored private let service: CaptureShortcutService
@@ -17,11 +18,11 @@ final class ShortcutRecorder {
         self.service = service
     }
 
-    func start() {
-        guard !isRecording else { return }
+    func start(_ action: CaptureAction) {
+        cancel()
         message = nil
-        isRecording = true
-        service.suspend()
+        recording = action
+        service.suspend(action)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handle(event)
             return nil
@@ -29,14 +30,14 @@ final class ShortcutRecorder {
     }
 
     func cancel() {
-        guard isRecording else { return }
+        guard let recording else { return }
         stopMonitoring()
-        service.resume()
+        service.resume(recording)
     }
 
-    func resetToDefault() {
-        if isRecording { stopMonitoring() }
-        apply(.defaultCapture)
+    func resetToDefault(_ action: CaptureAction) {
+        cancel()
+        apply(action.defaultShortcut, to: action)
     }
 
     private func handle(_ event: NSEvent) {
@@ -45,23 +46,28 @@ final class ShortcutRecorder {
             cancel()
             return
         }
+        guard let action = recording else { return }
         let shortcut = Shortcut(keyCode: UInt32(event.keyCode), modifiers: modifiers, keyLabel: KeyLabel.label(for: event))
         guard shortcut.isUsableGlobally else {
-            message = "需要同时按住 ⌘、⌥ 或 ⌃（F1–F12 可以单独使用）"
+            message = (action, "需要同时按住 ⌘、⌥ 或 ⌃（F1–F12 可以单独使用）")
             return
         }
         stopMonitoring()
-        apply(shortcut)
+        apply(shortcut, to: action)
     }
 
-    private func apply(_ shortcut: Shortcut) {
-        message = service.change(to: shortcut) ? nil : "\(shortcut.displayString) 已被其他应用占用，请换一个"
+    private func apply(_ shortcut: Shortcut, to action: CaptureAction) {
+        switch service.change(action, to: shortcut) {
+        case nil: message = nil
+        case .usedBy(let other): message = (action, "\(shortcut.displayString) 已经用于“\(other.title)”，请换一个")
+        case .taken: message = (action, "\(shortcut.displayString) 已被其他应用占用，请换一个")
+        }
     }
 
     private func stopMonitoring() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
-        isRecording = false
+        recording = nil
     }
 
     private static func modifiers(of event: NSEvent) -> ShortcutModifiers {
