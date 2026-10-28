@@ -1,9 +1,11 @@
 import AppKit
 import PixSnapCore
 
-/// A finished capture floating on screen where it was taken. The bar underneath has quick annotation
-/// tools that draw right on the image, plus favorite (when it's in history), pin, edit mode, copy,
-/// save and close. With no tool
+/// A finished capture floating on screen where it was taken. Clicking the image shows the bar
+/// underneath (and clicking again hides it): quick annotation tools that draw right on the image,
+/// zoom, favorite (when it's in history), pin, edit mode, copy, save, delete (from history, for
+/// good) and close. ⌘+ / ⌘− / ⌘0 and
+/// pinching zoom too. With no tool
 /// selected, dragging the image moves it; double-click opens edit mode; Esc drops the tool, then closes.
 /// To take it to another app (with its annotations), drag the 拖出 handle in the bar, or ⌘-drag the
 /// image, which also works while pinned.
@@ -24,6 +26,8 @@ final class FloatingCaptureWindow: NSPanel {
     private let unpinButton = NSButton()
     private var imageRect: CGRect
     private(set) var isPinned = false
+    /// The bar shows only after the image is clicked.
+    private var barShown = false
 
     /// Annotations so far, handed to edit mode and back.
     var history: EditHistory<AnnotationDocument> { canvas.history }
@@ -38,6 +42,7 @@ final class FloatingCaptureWindow: NSPanel {
         self.capture = capture
         self.historyID = historyID
         bar.showsFavorite = historyID != nil
+        bar.showsDelete = historyID != nil
         canvas = CanvasView(capture: capture, history: history)
         let layout = Self.layout(imageFrame: imageFrame, barSize: bar.fittingSize, visible: screen.visibleFrame)
         imageRect = layout.image
@@ -59,6 +64,10 @@ final class FloatingCaptureWindow: NSPanel {
         canvas.layer?.borderWidth = 1
         canvas.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.8).cgColor
         canvas.onDoubleClick = { [weak self] in self?.edit() }
+        canvas.onIdleClick = { [weak self] in
+            guard let self, !isPinned else { return }
+            setBarShown(!barShown)
+        }
         canvas.onHistoryChange = { [weak self] in self?.refreshUndo() }
         canvas.onToolShortcut = { [weak self] tool in
             if ActionBar.quickTools.contains(tool) { self?.setTool(tool) }
@@ -73,11 +82,13 @@ final class FloatingCaptureWindow: NSPanel {
         bar.onUndo = { [weak self] in self?.canvas.undo() }
         bar.onPin = { [weak self] in self?.setPinned(true) }
         bar.onFavorite = { [weak self] in self?.toggleFavorite() }
+        bar.onZoom = { [weak self] step in self?.zoom(by: step) }
         bar.onDragOut = { [weak self] view, event in self?.dragOut(from: view, event: event) }
         bar.onEdit = { [weak self] in self?.edit() }
         bar.onCopy = { [weak self] in self?.copyImage() }
         bar.onSave = { [weak self] in self?.saveImage() }
         bar.onClose = { [weak self] in self?.close() }
+        bar.onDelete = { [weak self] in self?.deleteForGood() }
 
         unpinButton.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "取消钉住")
         unpinButton.toolTip = "取消钉住，显示操作栏"
@@ -101,6 +112,86 @@ final class FloatingCaptureWindow: NSPanel {
         contentView = content
         refreshUndo()
         refreshFavorite()
+        bar.isHidden = true
+        bar.setZoom(zoom)
+    }
+
+    // MARK: The bar
+
+    /// Shows the bar without a click (`--pin … --bar`).
+    func showBar() { setBarShown(true) }
+
+    /// Fades the bar in (rising a little) or out.
+    private func setBarShown(_ shown: Bool) {
+        guard shown != barShown else { return }
+        barShown = shown
+        if !shown, canvas.tool != .select { setTool(.select) }
+        if shown {
+            bar.alphaValue = 0
+            bar.isHidden = false
+            bar.layer?.add(Motion.spring("transform.translation.y", from: 6, to: 0, duration: 0.3), forKey: "rise")
+        }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = shown ? 0.18 : 0.12
+            bar.animator().alphaValue = shown ? 1 : 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.barShown else { return }
+                self.bar.isHidden = true
+                self.invalidateShadow()
+            }
+        })
+        invalidateShadow()
+    }
+
+    // MARK: Zoom
+
+    /// The image's size on screen compared with its real size: 1 is 100%.
+    private var zoom: CGFloat {
+        imageRect.width / max(canvas.history.current.outputRect.width, 1)
+    }
+
+    private static let zoomSteps: [CGFloat] = [0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4]
+
+    /// `step` -1 zooms out a step, 1 in a step, 0 back to 100%.
+    private func zoom(by step: Int) {
+        let current = zoom
+        let next: CGFloat
+        switch step {
+        case ..<0: next = Self.zoomSteps.last { $0 < current - 0.005 } ?? Self.zoomSteps[0]
+        case 1...: next = Self.zoomSteps.first { $0 > current + 0.005 } ?? Self.zoomSteps.last!
+        default: next = 1
+        }
+        setZoom(next)
+    }
+
+    /// Resizes the image to `zoom` of its real size, its top-left corner staying put.
+    private func setZoom(_ newZoom: CGFloat) {
+        canvas.endTextEditing()
+        let real = canvas.history.current.outputRect.size
+        let clamped = min(max(newZoom, Self.zoomSteps.first!), Self.zoomSteps.last!)
+        let size = CGSize(width: (real.width * clamped).rounded(), height: (real.height * clamped).rounded())
+        guard size.width >= 16, size.height >= 16 else { return }
+        let current = imageFrame
+        lay(out: CGRect(x: current.minX, y: current.maxY - size.height, width: size.width, height: size.height))
+        bar.setZoom(zoom)
+        feedback.show("\(Int((zoom * 100).rounded()))%")
+    }
+
+    /// Pinching on a trackpad zooms smoothly; ⌘+ / ⌘− / ⌘0 step.
+    override func magnify(with event: NSEvent) {
+        setZoom(zoom * (1 + event.magnification))
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.modifierFlags.contains(.command) else { return super.performKeyEquivalent(with: event) }
+        switch event.charactersIgnoringModifiers {
+        case "=", "+": zoom(by: 1)
+        case "-": zoom(by: -1)
+        case "0": zoom(by: 0)
+        default: return super.performKeyEquivalent(with: event)
+        }
+        return true
     }
 
     private var isFavorite: Bool {
@@ -121,16 +212,50 @@ final class FloatingCaptureWindow: NSPanel {
 
     @objc private func favoriteFromMenu() { toggleFavorite() }
 
+    /// Removes the capture from history, files and all (not into the basket), and fades away.
+    private func deleteForGood() {
+        guard let historyID else { return }
+        HistoryLibrary.shared.deletePermanently([historyID])
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated { self?.close() }
+        })
+    }
+
+    /// From the pinned right-click menu: asks first, since there's no going back.
+    @objc private func deleteFromMenu() {
+        let alert = NSAlert()
+        alert.messageText = "永久删除这张截图？"
+        alert.informativeText = "会从截图历史里删除，不进洗衣篮，无法恢复。已经用“保存”存到别处的文件不受影响。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除").hasDestructiveAction = true
+        alert.addButton(withTitle: "取消")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { deleteForGood() }
+    }
+
     /// Pinning drops the bar and shrinks the window to the image; unpinning lays the bar out again.
     /// The image stays exactly where it is on screen either way.
     func setPinned(_ pinned: Bool) {
         guard pinned != isPinned else { return }
         canvas.endTextEditing()
         if pinned { setTool(.select) }
-        let imageOnScreen = imageFrame
         isPinned = pinned
+        // Unpinning brings the bar back, since that's what the pin button promises.
+        barShown = !pinned
+        bar.alphaValue = 1
+        bar.isHidden = pinned
+        unpinButton.isHidden = true
+        canvas.menu = pinned ? pinnedMenu() : nil
+        lay(out: imageFrame)
+    }
 
-        if pinned {
+    /// Puts the image at `imageOnScreen` (global coordinates), with the bar under or over it, or,
+    /// pinned, the window shrunk to just the image.
+    private func lay(out imageOnScreen: CGRect) {
+        if isPinned {
             setFrame(imageOnScreen, display: false)
             canvas.frame = CGRect(origin: .zero, size: imageOnScreen.size)
         } else {
@@ -140,14 +265,12 @@ final class FloatingCaptureWindow: NSPanel {
             canvas.frame = layout.image
             bar.frame = layout.bar
         }
-        bar.isHidden = pinned
         imageRect = canvas.frame
         feedback.frame = canvas.frame
-        unpinButton.isHidden = true
         let side: CGFloat = 24
         unpinButton.frame = CGRect(x: canvas.frame.maxX - side - 6, y: canvas.frame.maxY - side - 6, width: side, height: side)
-        canvas.menu = pinned ? pinnedMenu() : nil
         display()
+        invalidateShadow()
     }
 
     @objc private func unpin() {
@@ -170,6 +293,11 @@ final class FloatingCaptureWindow: NSPanel {
             menu.addItem(item)
         }
         menu.addItem(.separator())
+        if historyID != nil {
+            let delete = NSMenuItem(title: "永久删除…", action: #selector(deleteFromMenu), keyEquivalent: "")
+            delete.target = self
+            menu.addItem(delete)
+        }
         let close = NSMenuItem(title: "关闭", action: #selector(closeFromMenu), keyEquivalent: "")
         close.target = self
         menu.addItem(close)
@@ -232,6 +360,8 @@ final class FloatingCaptureWindow: NSPanel {
     private func setTool(_ tool: EditorTool) {
         canvas.tool = tool
         bar.show(tool)
+        // A tool picked by its key shows the bar, so it's clear which one is on.
+        if tool != .select, !isPinned { setBarShown(true) }
         makeKey()
         makeFirstResponder(canvas)
     }
@@ -310,16 +440,28 @@ private final class ActionBar: NSVisualEffectView {
     var onUndo: (() -> Void)?
     var onPin: (() -> Void)?
     var onFavorite: (() -> Void)?
+    /// -1 zoom out, 1 zoom in, 0 back to 100%.
+    var onZoom: ((Int) -> Void)?
     /// The 拖出 handle was dragged: the handle and the mouse event that started it.
     var onDragOut: ((NSView, NSEvent) -> Void)?
     var onEdit: (() -> Void)?
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
     var onClose: (() -> Void)?
+    /// The delete button was clicked twice: delete for good.
+    var onDelete: (() -> Void)?
 
     private let toolControl: NSSegmentedControl
     private var undoButton: NSButton!
     private var favoriteButton: NSButton!
+    private var deleteButton: NSButton!
+    private var confirmingDelete = false
+
+    /// Only captures kept in history can be deleted from it.
+    var showsDelete = true {
+        didSet { deleteButton.isHidden = !showsDelete }
+    }
+    private var zoomLabel: NSButton!
 
     /// Only captures kept in history can be favorites.
     var showsFavorite = true {
@@ -348,9 +490,19 @@ private final class ActionBar: NSVisualEffectView {
 
         undoButton = button(nil, symbol: "arrow.uturn.backward", tip: "撤销", action: #selector(undo))
         favoriteButton = button(nil, symbol: "star", tip: "收藏：不会被自动清理，晾衣架上换成木夹子", action: #selector(favorite))
+        zoomLabel = NSButton(title: "100%", target: self, action: #selector(zoomReset))
+        zoomLabel.bezelStyle = .recessed
+        zoomLabel.showsBorderOnlyWhileMouseInside = true
+        zoomLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        zoomLabel.toolTip = "恢复原始大小（⌘0）"
+        zoomLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
         let views: [NSView] = [
             toolControl,
             undoButton,
+            divider(),
+            button(nil, symbol: "minus.magnifyingglass", tip: "缩小（⌘−，也可以双指捏合）", action: #selector(zoomOut)),
+            zoomLabel,
+            button(nil, symbol: "plus.magnifyingglass", tip: "放大（⌘+）", action: #selector(zoomIn)),
             divider(),
             favoriteButton,
             button("钉住", symbol: "pin", tip: "钉在屏幕上：隐藏操作栏，只留图片，可拖动", action: #selector(pin)),
@@ -358,6 +510,7 @@ private final class ActionBar: NSVisualEffectView {
             button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
             dragHandle(),
             button("保存", symbol: "square.and.arrow.down", tip: "保存为 PNG，选择保存位置", action: #selector(save)),
+            deleteButtonView(),
             button("关闭", symbol: "xmark", tip: "关闭（Esc）", action: #selector(closeCapture)),
         ]
         let stack = NSStackView(views: views)
@@ -389,6 +542,10 @@ private final class ActionBar: NSVisualEffectView {
         undoButton.isEnabled = enabled
     }
 
+    func setZoom(_ zoom: CGFloat) {
+        zoomLabel.title = "\(Int((zoom * 100).rounded()))%"
+    }
+
     func setFavorite(_ favorite: Bool) {
         favoriteButton.image = NSImage(systemSymbolName: favorite ? "star.fill" : "star", accessibilityDescription: favorite ? "取消收藏" : "收藏")
         favoriteButton.contentTintColor = favorite ? .systemYellow : nil
@@ -406,6 +563,31 @@ private final class ActionBar: NSVisualEffectView {
         button.font = .systemFont(ofSize: 12)
         button.toolTip = tip
         return button
+    }
+
+    private func deleteButtonView() -> NSButton {
+        deleteButton = button("删除", symbol: "trash", tip: "从截图历史里永久删除，不进洗衣篮（点两下确认）", action: #selector(deleteClicked))
+        return deleteButton
+    }
+
+    /// The first click asks; a second click within a few seconds deletes.
+    @objc private func deleteClicked() {
+        if confirmingDelete {
+            onDelete?()
+            return
+        }
+        confirmingDelete = true
+        // Same width as "删除", so the bar doesn't need laying out again.
+        deleteButton.title = "确认"
+        deleteButton.contentTintColor = .systemRed
+        deleteButton.image = NSImage(systemSymbolName: "trash.fill", accessibilityDescription: "确认删除")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, confirmingDelete else { return }
+            confirmingDelete = false
+            deleteButton.title = "删除"
+            deleteButton.contentTintColor = nil
+            deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "删除")
+        }
     }
 
     /// Drag it into a chat, mail, Finder or any app that takes images.
@@ -438,6 +620,9 @@ private final class ActionBar: NSVisualEffectView {
     @objc private func undo() { onUndo?() }
     @objc private func pin() { onPin?() }
     @objc private func favorite() { onFavorite?() }
+    @objc private func zoomIn() { onZoom?(1) }
+    @objc private func zoomOut() { onZoom?(-1) }
+    @objc private func zoomReset() { onZoom?(0) }
     @objc private func edit() { onEdit?() }
     @objc private func copyImage() { onCopy?() }
     @objc private func save() { onSave?() }

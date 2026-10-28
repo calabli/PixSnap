@@ -25,6 +25,8 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     var onEscape: (() -> Void)?
     /// Called on a double-click that doesn't hit any annotation.
     var onDoubleClick: (() -> Void)?
+    /// With `dragsWindowWhenIdle`, called on a single click that didn't move the window.
+    var onIdleClick: (() -> Void)?
 
     /// Floating captures show only the cropped result; the editor shows the whole canvas with the crop dimmed.
     var showsOnlyOutput = false
@@ -206,7 +208,9 @@ final class CanvasView: NSView, NSTextFieldDelegate {
                 drag = .move(original: hit, from: point)
             } else if dragsWindowWhenIdle {
                 needsDisplay = true
+                let origin = window?.frame.origin
                 window?.performDrag(with: event)
+                if event.clickCount == 1, window?.frame.origin == origin { onIdleClick?() }
                 return
             }
         case .rectangle, .arrow, .mosaic:

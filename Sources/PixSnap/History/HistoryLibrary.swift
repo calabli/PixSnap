@@ -24,6 +24,8 @@ final class HistoryLibrary {
     /// Favorites set while a new capture was still being written, applied once it's recorded.
     @ObservationIgnored private var pendingFavorites: [UUID: Bool] = [:]
     @ObservationIgnored private var pendingIDs: Set<UUID> = []
+    /// Captures deleted while still being written: dropped once the write finishes.
+    @ObservationIgnored private var pendingDeletions: Set<UUID> = []
 
     private init() {
         folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -65,6 +67,10 @@ final class HistoryLibrary {
                 HistoryFiles.write(image.image, id: entry.id, originals: originals, thumbnails: thumbnails)
             }.value
             guard written else { return }
+            if pendingDeletions.remove(entry.id) != nil {
+                HistoryFiles.remove(id: entry.id, originals: originals, thumbnails: thumbnails)
+                return
+            }
             do {
                 var recorded = entry
                 if let favorite = pendingFavorites.removeValue(forKey: entry.id) { recorded.isFavorite = favorite }
@@ -193,6 +199,15 @@ final class HistoryLibrary {
         }
         guard !expired.isEmpty else { return }
         remove(Array(Set(expired)))
+    }
+
+    /// Deletes captures for good, skipping the basket: the record and both image files. Files
+    /// saved elsewhere with 保存 aren't touched.
+    func deletePermanently(_ ids: [UUID]) {
+        let writing = ids.filter { pendingIDs.contains($0) }
+        pendingDeletions.formUnion(writing)
+        writing.forEach { pendingFavorites[$0] = nil }
+        remove(ids.filter { !pendingIDs.contains($0) })
     }
 
     /// Removes everything, favorites included.

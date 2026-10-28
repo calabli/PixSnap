@@ -89,6 +89,7 @@ final class CaptureCoordinator {
         else { return }
         pin(capture, at: ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame), on: screen)
         if pinned { floatingCaptures.last?.setPinned(true) }
+        if CommandLine.arguments.contains("--bar") { floatingCaptures.last?.showBar() }
     }
 
     /// Development: shows the selection overlay over an image file instead of the live screen.

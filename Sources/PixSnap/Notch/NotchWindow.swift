@@ -117,7 +117,14 @@ final class NotchWindow: NSPanel {
     override func keyDown(with event: NSEvent) {
         guard case .open = phase else { return super.keyDown(with: event) }
         if event.modifierFlags.contains(.command) {
-            if event.charactersIgnoringModifiers == "z" { hangBackLastThrown() } else { super.keyDown(with: event) }
+            if event.charactersIgnoringModifiers == "z" {
+                hangBackLastThrown()
+            } else if event.keyCode == 51, event.modifierFlags.contains(.option), let entry = preview.entry ?? clothesline.hoveredEntry {
+                // ⌥⌘⌫, like the Finder's "delete immediately".
+                deleteForGood(entry)
+            } else {
+                super.keyDown(with: event)
+            }
             return
         }
         switch event.keyCode {
@@ -454,6 +461,7 @@ final class NotchWindow: NSPanel {
         add("浮动到屏幕上", "macwindow.on.rectangle", key: "\r", #selector(floatFromMenu(_:)))
         menu.addItem(.separator())
         add(favorite ? "已收藏，不能扔" : "扔进洗衣篮", "basket", key: "\u{8}", #selector(throwFromMenu(_:)), enabled: !favorite)
+        add("永久删除…", "trash", key: "", #selector(deleteFromMenu(_:)))
         return menu
     }
 
@@ -470,6 +478,58 @@ final class NotchWindow: NSPanel {
     @objc private func floatFromMenu(_ item: NSMenuItem) {
         guard let entry = item.representedObject as? HistoryEntry else { return }
         pick(entry)
+    }
+
+    @objc private func deleteFromMenu(_ item: NSMenuItem) {
+        guard let entry = item.representedObject as? HistoryEntry else { return }
+        deleteForGood(entry)
+    }
+
+    /// Deletes a capture for good, after asking: not into the basket, no ⌘Z. The photo dissolves
+    /// where it hangs (or where the preview shows it).
+    private func deleteForGood(_ entry: HistoryEntry) {
+        let favorite = HistoryLibrary.shared.isFavorite(entry.id)
+        let alert = NSAlert()
+        alert.messageText = favorite ? "永久删除这张收藏的截图？" : "永久删除这张截图？"
+        alert.informativeText = "会从截图历史里删除，不进洗衣篮，无法恢复。已经用“保存”存到别处的文件不受影响。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除").hasDestructiveAction = true
+        alert.addButton(withTitle: "取消")
+        // Above the lines and the preview, which sit over everything.
+        alert.window.level = NSWindow.Level(rawValue: level.rawValue + 2)
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let taken: (layer: CALayer, frame: CGRect)?
+        if preview.entry == entry, let picture = preview.takePicture() {
+            _ = clothesline.pullOff(entry)
+            taken = picture
+        } else {
+            taken = clothesline.pullOff(entry)
+        }
+        HistoryLibrary.shared.deletePermanently([entry.id])
+        thrown.removeAll { $0 == entry }
+        TrashSound.emptyTrash.play()
+        guard let (photo, frame) = taken else { return }
+        // A soft "poof": it swells a little as it fades.
+        photo.position = CGPoint(x: frame.midX, y: frame.midY)
+        content.layer?.addSublayer(photo)
+        let scale = (photo.value(forKeyPath: "transform.scale") as? CGFloat) ?? 1
+        Motion.immediately {
+            photo.opacity = 0
+            photo.setValue(scale * 1.25, forKeyPath: "transform.scale")
+        }
+        let swell = CABasicAnimation(keyPath: "transform.scale")
+        swell.fromValue = scale
+        swell.toValue = scale * 1.25
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        let group = CAAnimationGroup()
+        group.animations = [swell, fade]
+        group.duration = 0.3
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        Motion.run(on: photo, ["poof": group]) { photo.removeFromSuperlayer() }
     }
 
     @objc private func throwFromMenu(_ item: NSMenuItem) {
