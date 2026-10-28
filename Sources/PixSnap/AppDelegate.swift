@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var captureShortcut = CaptureShortcutService { [weak self] in self?.coordinator.startCapture() }
     private lazy var settingsWindow = SettingsWindowController(shortcutService: captureShortcut)
     private var benchmark: CaptureBenchmark?
+    /// ⌥⇧2 for a long screenshot.
+    private let scrollingHotKey = HotKey()
     private lazy var notch = NotchController { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -22,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
 
         captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItem() }
+        scrollingHotKey.onPress = { [weak self] in self?.coordinator.startScrollingCapture() }
+        _ = scrollingHotKey.register(.defaultScrollingCapture)
         if !captureShortcut.start() {
             let alert = NSAlert()
             alert.messageText = "快捷键 \(captureShortcut.shortcut.displayString) 已被占用"
@@ -49,6 +53,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let flag = arguments.firstIndex(of: "--history-add"), arguments.indices.contains(flag + 1) {
             coordinator.addToHistory(imageAt: URL(fileURLWithPath: arguments[flag + 1]))
         }
+        // `--scroll-capture x,y,w,h seconds output.png`: a long screenshot of that region (global
+        // AppKit coordinates), finished after `seconds` and written to `output.png`.
+        if let flag = arguments.firstIndex(of: "--scroll-capture"), arguments.indices.contains(flag + 3) {
+            let numbers = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }
+            if numbers.count == 4 {
+                coordinator.startScrollingCapture(in: CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3]),
+                                                  finishingAfter: Double(arguments[flag + 2]) ?? 5,
+                                                  writingTo: URL(fileURLWithPath: arguments[flag + 3]))
+            }
+        }
         if let flag = arguments.firstIndex(of: "--overlay"), arguments.indices.contains(flag + 1) {
             coordinator.showOverlay(forImageAt: URL(fileURLWithPath: arguments[flag + 1]))
         }
@@ -71,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let capture = NSMenuItem(title: "截取区域", action: #selector(captureFromMenu), keyEquivalent: "")
         menu.addItem(capture)
         captureMenuItem = capture
+        let scrolling = NSMenuItem(title: "长截图", action: #selector(scrollingCaptureFromMenu), keyEquivalent: "2")
+        scrolling.keyEquivalentModifierMask = [.option, .shift]
+        menu.addItem(scrolling)
         let recent = NSMenuItem(title: "最近截图", action: nil, keyEquivalent: "")
         recentMenu.delegate = self
         recent.submenu = recentMenu
@@ -160,6 +177,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func pinRecent(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? UUID, let entry = recentEntries[id] else { return }
         coordinator.pinHistoryEntry(entry)
+    }
+
+    @objc private func scrollingCaptureFromMenu() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [coordinator] in
+            coordinator.startScrollingCapture()
+        }
     }
 
     @objc private func captureFromMenu() {

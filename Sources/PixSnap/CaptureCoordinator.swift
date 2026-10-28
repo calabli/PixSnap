@@ -14,6 +14,9 @@ final class CaptureCoordinator {
     /// Display frames when the current capture started.
     private var captureScreenFrames: [CGRect] = []
     private var screenObserver: NSObjectProtocol?
+    /// The selection is for a long screenshot rather than a plain capture.
+    private var selectsScrollingRegion = false
+    private var scrollSession: ScrollCaptureSession?
 
     init() {
         screenObserver = NotificationCenter.default.addObserver(
@@ -123,6 +126,15 @@ final class CaptureCoordinator {
         startCapture(timing: CaptureTiming())
     }
 
+    /// A long screenshot: select the region as usual, then scroll its content while PixSnap
+    /// stitches it together.
+    func startScrollingCapture() {
+        guard !isCapturing, scrollSession == nil else { return }
+        selectsScrollingRegion = true
+        startCapture()
+        if !isCapturing { selectsScrollingRegion = false }
+    }
+
     func startCapture(timing: CaptureTiming) {
         guard !isCapturing else { return }
         guard PermissionGuide.ensureScreenCapture() else { return }
@@ -205,11 +217,20 @@ final class CaptureCoordinator {
         )
         // The app that was in front when the capture started, recorded in history ("微信", "Figma"…).
         let sourceApp = previousApp
+        let scrolling = selectsScrollingRegion
         endSession()
+        let scale = frozen.screen.backingScaleFactor
+        if scrolling {
+            let screenFrame = frozen.screen.frame
+            let region = CGRect(x: screenFrame.minX + pixelRect.minX / scale, y: screenFrame.minY + screenFrame.height - pixelRect.maxY / scale,
+                                width: pixelRect.width / scale, height: pixelRect.height / scale)
+            guard region.width >= 20, region.height >= 40 else { return }
+            startScrolling(in: region, on: frozen.screen, sourceApp: sourceApp)
+            return
+        }
         guard pixelRect.width >= 1, pixelRect.height >= 1,
               let cropped = frozen.image.cropping(to: pixelRect) else { return }
 
-        let scale = frozen.screen.backingScaleFactor
         let capture = Capture(image: cropped, scale: scale)
         if AppSettings.shared.copiesAfterCapture { ImageExporter.copyToPasteboard(capture) }
         let entry = HistoryLibrary.shared.add(capture, sourceApp: sourceApp)
@@ -243,10 +264,48 @@ final class CaptureCoordinator {
         floating.orderFrontRegardless()
     }
 
+    /// Development: a long screenshot of `region` (global AppKit coordinates) without selecting it,
+    /// finished after `seconds`, also written to `output` as PNG.
+    func startScrollingCapture(in region: CGRect, finishingAfter seconds: Double, writingTo output: URL?) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(region) }) else { return }
+        startScrolling(in: region, on: screen, sourceApp: nil)
+        let session = scrollSession
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { session?.finishNow() }
+        scrollOutput = output
+    }
+
+    private var scrollOutput: URL?
+
+    /// Runs the long screenshot over `region`; when it's done, it floats like any capture, shrunk
+    /// to fit the screen, and goes into history.
+    private func startScrolling(in region: CGRect, on screen: NSScreen, sourceApp: NSRunningApplication?) {
+        let session = ScrollCaptureSession(region: region, on: screen)
+        session.onFinish = { [weak self] capture in
+            self?.scrollSession = nil
+            guard let self, let capture else { return }
+            if let output = scrollOutput, let png = ImageExporter.pngData(for: capture) {
+                try? png.write(to: output)
+                scrollOutput = nil
+            }
+            if AppSettings.shared.copiesAfterCapture { ImageExporter.copyToPasteboard(capture) }
+            let entry = HistoryLibrary.shared.add(capture, sourceApp: sourceApp)
+            // Its top where the region's top was, as tall as the screen allows.
+            let visible = screen.visibleFrame
+            let fit = min(1, (visible.height - 60) / capture.pointSize.height, (visible.width - 40) / capture.pointSize.width)
+            let size = CGSize(width: (capture.pointSize.width * fit).rounded(), height: (capture.pointSize.height * fit).rounded())
+            let top = min(region.maxY, visible.maxY - 10)
+            let x = min(max(region.midX - size.width / 2, visible.minX + 10), visible.maxX - size.width - 10)
+            pin(capture, at: CGRect(x: x, y: top - size.height, width: size.width, height: size.height), on: screen, historyID: entry?.id)
+        }
+        scrollSession = session
+        session.start()
+    }
+
     private func endSession() {
         overlays.forEach { $0.orderOut(nil) }
         overlays.removeAll()
         isCapturing = false
+        selectsScrollingRegion = false
         previousApp?.activate()
         previousApp = nil
     }

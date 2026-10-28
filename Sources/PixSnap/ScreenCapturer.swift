@@ -110,6 +110,29 @@ final class ScreenCapturer {
         refreshInBackground()
     }
 
+    /// Captures `rect` (global AppKit coordinates, inside `screen`) at the screen's full
+    /// resolution, leaving PixSnap's own windows out. Used over and over by long screenshots.
+    func captureRegion(_ rect: CGRect, on screen: NSScreen) async throws -> CGImage {
+        var content = try await contentForCapture()
+        if ownApplication == nil || !content.displays.contains(where: { $0.displayID == screen.displayID }) {
+            content = try await freshContent()
+        }
+        guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        let scale = screen.backingScaleFactor
+        let configuration = SCStreamConfiguration()
+        // The display's own coordinates: points, top-left origin.
+        configuration.sourceRect = CGRect(x: rect.minX - screen.frame.minX, y: screen.frame.maxY - rect.maxY,
+                                          width: rect.width, height: rect.height)
+        configuration.width = Int((rect.width * scale).rounded())
+        configuration.height = Int((rect.height * scale).rounded())
+        configuration.showsCursor = false
+        configuration.captureResolution = .best
+        let filter = SCContentFilter(display: display, excludingApplications: ownApplication.map { [$0] } ?? [], exceptingWindows: [])
+        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+    }
+
     private func contentForCapture() async throws -> SCShareableContent {
         if let cachedContent { return cachedContent }
         return try await freshContent()
