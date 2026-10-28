@@ -8,7 +8,8 @@ import PixSnapCore
 /// Esc or 取消 gives up.
 ///
 /// PixSnap's own windows are left out of the captures, and the frame and dimming ignore the mouse,
-/// so scrolling goes straight to the app underneath.
+/// so scrolling goes straight to the app underneath. That app keeps the keyboard too, so Esc and
+/// Return are taken as global shortcuts for as long as the session runs.
 @MainActor
 final class ScrollCaptureSession {
     /// Called once with the long image, or nil if it was cancelled.
@@ -23,6 +24,8 @@ final class ScrollCaptureSession {
     private let preview: StitchPreviewWindow
     private var isRunning = true
     private var lastPreview = Date.distantPast
+    private let escapeKey = HotKey()
+    private let returnKey = HotKey()
 
     /// About eight captures a second: smooth enough to follow normal scrolling.
     private static let interval: Duration = .milliseconds(120)
@@ -45,6 +48,12 @@ final class ScrollCaptureSession {
         preview.orderFrontRegardless()
         controls.place(near: region, on: screen)
         controls.makeKeyAndOrderFront(nil)
+        escapeKey.onPress = { [weak self] in self?.cancel() }
+        returnKey.onPress = { [weak self] in self?.finish() }
+        if !escapeKey.register(Shortcut(keyCode: 53, modifiers: [], keyLabel: "Esc"))
+            || !returnKey.register(Shortcut(keyCode: 36, modifiers: [], keyLabel: "↩")) {
+            NSLog("PixSnap long screenshot: Esc or Return is taken by another app; use the buttons")
+        }
         Task { await run() }
     }
 
@@ -107,6 +116,8 @@ final class ScrollCaptureSession {
     }
 
     private func close() {
+        escapeKey.unregister()
+        returnKey.unregister()
         frameWindow.orderOut(nil)
         preview.orderOut(nil)
         controls.orderOut(nil)
