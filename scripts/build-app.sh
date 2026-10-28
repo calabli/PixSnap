@@ -8,8 +8,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/PixSnap.app"
 
 cd "$ROOT"
-swift build -c "$CONFIG"
-BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
+# Release builds run on both Apple silicon and Intel Macs.
+ARCHS=()
+[[ "$CONFIG" == "release" ]] && ARCHS=(--arch arm64 --arch x86_64)
+swift build -c "$CONFIG" ${ARCHS[@]+"${ARCHS[@]}"}
+BIN_DIR="$(swift build -c "$CONFIG" ${ARCHS[@]+"${ARCHS[@]}"} --show-bin-path)"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

@@ -18,6 +18,14 @@ swift test
 
 也可以用 Xcode 直接打开 `Package.swift` 编辑代码。
 
+打安装包（同时支持 Apple 芯片和 Intel，输出 `build/PixSnap-<版本>.dmg`）：
+
+```bash
+scripts/package-dmg.sh
+```
+
+现在用开发证书签名、没有公证，别的 Mac 第一次打开会被拦下：在“系统设置 › 隐私与安全性”底部点“仍要打开”。
+
 ## 首次使用
 
 1. 按 ⌘⇧2，或点菜单栏图标 › 截取区域。
