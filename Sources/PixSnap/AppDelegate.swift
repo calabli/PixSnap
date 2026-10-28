@@ -45,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]), pinned: arguments.contains("--pinned"))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
+        // `--beautify-samples <image> <folder>`: 美化's guess for the image, and every style written to the folder.
+        if let flag = arguments.firstIndex(of: "--beautify-samples"), arguments.indices.contains(flag + 2) {
+            coordinator.writeBeautifySamples(imageAt: URL(fileURLWithPath: arguments[flag + 1]),
+                                             to: URL(fileURLWithPath: arguments[flag + 2], isDirectory: true))
+        }
         // `--delayed-capture x,y,w,h`: the countdown and capture over that region (global AppKit coordinates).
         if let flag = arguments.firstIndex(of: "--delayed-capture"), arguments.indices.contains(flag + 1) {
             let numbers = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }

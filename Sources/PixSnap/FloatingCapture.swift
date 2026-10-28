@@ -4,7 +4,7 @@ import VisionKit
 
 /// A finished capture floating on screen where it was taken. Clicking the image shows the bar
 /// underneath (and clicking again hides it): quick annotation tools that draw right on the image,
-/// zoom, favorite (when it's in history), pin, edit mode, copy, save, delete (from history, for
+/// zoom, favorite (when it's in history), pin, edit mode, copy, 美化, save, delete (from history, for
 /// good) and close. ⌘+ / ⌘− / ⌘0 and
 /// pinching zoom too. 选取文字 turns on Live Text: the text in the image is highlighted and can be
 /// selected like a document's (drag, double-click a word), ⌘C copying the selection — or, with
@@ -18,6 +18,8 @@ import VisionKit
 @MainActor
 final class FloatingCaptureWindow: NSPanel {
     var onEdit: ((FloatingCaptureWindow) -> Void)?
+    /// 美化 with the image as it looks now.
+    var onBeautify: ((FloatingCaptureWindow, Capture) -> Void)?
     var onClosed: ((FloatingCaptureWindow) -> Void)?
 
     let capture: Capture
@@ -94,6 +96,7 @@ final class FloatingCaptureWindow: NSPanel {
         bar.onEdit = { [weak self] in self?.edit() }
         bar.onCopy = { [weak self] in self?.copyImage() }
         bar.onBigBang = { [weak self] in self?.bigBang() }
+        bar.onBeautify = { [weak self] in self?.beautify() }
         bar.onCopyText = { [weak self] in
             guard let self else { return }
             setSelectsText(!selectsText)
@@ -310,6 +313,7 @@ final class FloatingCaptureWindow: NSPanel {
             ("复制", #selector(copyFromMenu)),
             ("选取文字", #selector(selectTextFromMenu)),
             ("大爆炸", #selector(bigBangFromMenu)),
+            ("美化", #selector(beautifyFromMenu)),
             ("保存", #selector(saveFromMenu)),
         ]
         if historyID != nil { items.insert((isFavorite ? "取消收藏" : "收藏", #selector(favoriteFromMenu)), at: 1) }
@@ -418,6 +422,18 @@ final class FloatingCaptureWindow: NSPanel {
     }
 
     @objc private func bigBangFromMenu() { bigBang() }
+
+    /// 美化: finished in the style that suits what it shows, in a panel to pick another.
+    private func beautify() {
+        guard let result = renderedCapture() else { return }
+        setSelectsText(false)
+        onBeautify?(self, result)
+    }
+
+    @objc private func beautifyFromMenu() { beautify() }
+
+    /// Opens 美化 without a click (`--pin … --beautify`).
+    func beautifyNow() { beautify() }
 
     /// Bursts without a click (`--pin … --bigbang`).
     func bigBangNow() { bigBang() }
@@ -537,6 +553,7 @@ private final class ActionBar: NSVisualEffectView {
     var onCopy: (() -> Void)?
     var onCopyText: (() -> Void)?
     var onBigBang: (() -> Void)?
+    var onBeautify: (() -> Void)?
     var onSave: (() -> Void)?
     var onClose: (() -> Void)?
     /// The delete button was clicked twice: delete for good.
@@ -601,6 +618,7 @@ private final class ActionBar: NSVisualEffectView {
             button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
             selectTextButtonView(),
             button(nil, symbol: "sparkles", tip: "大爆炸：把图里的文字炸成一个个词，点选后复制或搜索", action: #selector(bigBang)),
+            button("美化", symbol: "wand.and.stars", tip: "智能美化：识别截图内容（代码、文档、照片、界面…），配上合适的背景、圆角和阴影", action: #selector(beautify)),
             dragHandle(),
             button("保存", symbol: "square.and.arrow.down", tip: "保存为 PNG，选择保存位置", action: #selector(save)),
             deleteButtonView(),
@@ -732,6 +750,7 @@ private final class ActionBar: NSVisualEffectView {
     @objc private func copyImage() { onCopy?() }
     @objc private func copyText() { onCopyText?() }
     @objc private func bigBang() { onBigBang?() }
+    @objc private func beautify() { onBeautify?() }
     @objc private func save() { onSave?() }
     @objc private func closeCapture() { onClose?() }
 }

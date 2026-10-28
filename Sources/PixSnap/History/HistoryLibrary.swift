@@ -254,6 +254,11 @@ final class HistoryLibrary {
             .reduce(Int64(0)) { $0 + Int64($1) }
     }
 
+    /// The app a capture was taken from, if history knows it.
+    func sourceAppName(for id: UUID) -> String? {
+        (try? database?.entry(id: id))??.sourceAppName
+    }
+
     // MARK: Favorites
 
     /// Favorites are never cleaned up automatically and can't be thrown into the basket.

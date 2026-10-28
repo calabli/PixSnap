@@ -38,6 +38,11 @@ enum TextRecognizer {
         }.value
     }
 
+    /// Each line's text and box (unit coordinates, bottom-left origin), in reading order.
+    static func lines(in image: CGImage) async -> [(text: String, box: CGRect)] {
+        await Task.detached(priority: .userInitiated) { readLines(image).map { ($0.candidate.string, $0.box) } }.value
+    }
+
     /// Recognized lines in reading order.
     private static func readLines(_ image: CGImage) -> [(box: CGRect, candidate: VNRecognizedText)] {
         let request = VNRecognizeTextRequest()

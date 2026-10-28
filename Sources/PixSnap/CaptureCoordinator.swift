@@ -108,6 +108,29 @@ final class CaptureCoordinator {
         if CommandLine.arguments.contains("--bar") { floatingCaptures.last?.showBar() }
         if CommandLine.arguments.contains("--select-text") { floatingCaptures.last?.selectText() }
         if CommandLine.arguments.contains("--bigbang") { floatingCaptures.last?.bigBangNow() }
+        if CommandLine.arguments.contains("--beautify") { floatingCaptures.last?.beautifyNow() }
+    }
+
+    /// Development: what 美化 makes of an image file — its guess printed, every style written to
+    /// `folder` as PNG — then quits.
+    func writeBeautifySamples(imageAt url: URL, to folder: URL) {
+        guard let capture = Self.loadCapture(at: url) else { return }
+        Task {
+            let signals = await ContentAnalyzer.signals(for: capture.image, sourceApp: nil)
+            let kind = ContentClassifier.classify(signals)
+            print("\(url.lastPathComponent): \(kind.title) — lines \(signals.lines.count), code \(String(format: "%.2f", ContentClassifier.codeScore(signals.lines))), "
+                + "text \(String(format: "%.2f", signals.textCoverage)), flat \(String(format: "%.2f", signals.flatness)), "
+                + "conc \(String(format: "%.2f", signals.concentration)), bright \(String(format: "%.2f", signals.brightness)), "
+                + "chat \(ContentClassifier.looksLikeChat(signals)), accent \(signals.accent)")
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let stem = url.deletingPathExtension().lastPathComponent
+            for (index, style) in BeautifyStyle.choices(for: kind, signals).enumerated() {
+                guard let image = Beautifier.render(capture.image, scale: capture.scale, style: style),
+                      let png = ImageExporter.pngData(for: Capture(image: image, scale: capture.scale)) else { continue }
+                try? png.write(to: folder.appendingPathComponent("\(stem)-\(index)-\(style.name).png"))
+            }
+            exit(0)
+        }
     }
 
     /// Development: shows the selection overlay over an image file instead of the live screen.
@@ -468,6 +491,19 @@ final class CaptureCoordinator {
             let history = window.history
             window.close()
             self?.openEditor(for: window.capture, history: history, on: screen, returnFrame: frame, historyID: window.historyID)
+        }
+        floating.onBeautify = { [weak self] window, result in
+            let source = window.historyID.flatMap { HistoryLibrary.shared.sourceAppName(for: $0) }
+            BeautifyWindow.show(result, sourceApp: source, near: window.imageFrame, on: window.screen ?? screen) { finished in
+                // The finished one floats over where the original is, and goes into history.
+                let entry = HistoryLibrary.shared.add(finished, sourceApp: nil)
+                let original = window.imageFrame, visible = (window.screen ?? screen).visibleFrame
+                let fit = min(1, (visible.height - 60) / finished.pointSize.height, (visible.width - 40) / finished.pointSize.width)
+                let size = CGSize(width: (finished.pointSize.width * fit).rounded(), height: (finished.pointSize.height * fit).rounded())
+                let x = min(max(original.midX - size.width / 2, visible.minX + 10), visible.maxX - size.width - 10)
+                let y = min(max(original.midY - size.height / 2, visible.minY + 50), visible.maxY - size.height - 10)
+                self?.pin(finished, at: CGRect(x: x, y: y, width: size.width, height: size.height), on: window.screen ?? screen, historyID: entry?.id)
+            }
         }
         floating.onClosed = { [weak self] window in self?.floatingCaptures.removeAll { $0 === window } }
         floatingCaptures.append(floating)
