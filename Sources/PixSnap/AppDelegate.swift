@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var notch = NotchController { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The floating bar's buttons are icons; their names show on hover, so show them soon.
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 350])
         setUpStatusItem()
         Task { await ScreenCapturer.shared.warmUp() }
         HistoryLibrary.shared.cleanUp()

@@ -4,7 +4,8 @@ import PixSnapCore
 import UniformTypeIdentifiers
 
 /// A recording, floating where it was made (or opened from history): it plays on a loop (muted),
-/// with its length, and a bar to save it as MP4 or GIF, drag it into another app, or close it.
+/// with its length, and a bar to save it as MP4 or GIF, drag it into another app, delete it from
+/// history for good (two clicks), or close it.
 /// Recordings are kept in history like screenshots; with history off, an unsaved one is cleaned
 /// out of Caches after a day.
 @MainActor
@@ -12,6 +13,10 @@ final class RecordingResultWindow: NSPanel {
     var onClosed: ((RecordingResultWindow) -> Void)?
 
     private let video: URL
+    /// Its entry in history, if it has one; deleting needs it.
+    private let historyID: UUID?
+    private var deleteButton: NSButton?
+    private var confirmingDelete = false
     private let duration: Double
     private let recordedAt = Date()
     private let player: AVQueuePlayer
@@ -22,8 +27,9 @@ final class RecordingResultWindow: NSPanel {
     private static let barHeight: CGFloat = 40
     private static let largest = CGSize(width: 520, height: 400)
 
-    init(video: URL, duration: Double, pixelSize: CGSize, near region: CGRect, on screen: NSScreen) {
+    init(video: URL, duration: Double, pixelSize: CGSize, near region: CGRect, on screen: NSScreen, historyID: UUID?) {
         self.video = video
+        self.historyID = historyID
         self.duration = duration
         let item = AVPlayerItem(url: video)
         player = AVQueuePlayer()
@@ -33,7 +39,7 @@ final class RecordingResultWindow: NSPanel {
         // The video, scaled to fit, with the bar under it; placed over the recorded region.
         let fit = min(1, Self.largest.width / max(region.width, 1), Self.largest.height / max(region.height, 1))
         let videoSize = CGSize(width: max(240, (region.width * fit).rounded()), height: max(120, (region.height * fit).rounded()))
-        let size = CGSize(width: max(videoSize.width, 470), height: videoSize.height + Self.barHeight + 6)
+        let size = CGSize(width: max(videoSize.width, historyID == nil ? 470 : 540), height: videoSize.height + Self.barHeight + 6)
         let visible = screen.visibleFrame
         let origin = CGPoint(x: min(max(region.midX - size.width / 2, visible.minX + 10), visible.maxX - size.width - 10),
                              y: min(max(region.midY - size.height / 2, visible.minY + 10), visible.maxY - size.height - 10))
@@ -73,13 +79,18 @@ final class RecordingResultWindow: NSPanel {
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let drag = FileDragHandle(file: { [weak self] in self?.video })
-        let views: [NSView] = [
+        var views: [NSView] = [
             status,
             button("存为视频", symbol: "film", tip: "保存为 MP4", action: #selector(saveVideo)),
             button("存为 GIF", symbol: "photo.on.rectangle", tip: "转成 GIF 保存（15 帧/秒，最宽 800 像素）", action: #selector(saveGIF)),
             drag,
-            button(nil, symbol: "xmark", tip: "关闭", action: #selector(closeClicked)),
         ]
+        if historyID != nil {
+            let delete = button("删除", symbol: "trash", tip: "从截图历史里永久删除，不进洗衣篮（点两下确认）", action: #selector(deleteClicked))
+            deleteButton = delete
+            views.append(delete)
+        }
+        views.append(button(nil, symbol: "xmark", tip: "关闭", action: #selector(closeClicked)))
         let stack = NSStackView(views: views)
         stack.spacing = 4
         stack.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 6)
@@ -191,6 +202,41 @@ final class RecordingResultWindow: NSPanel {
     }
 
     @objc private func closeClicked() { close() }
+
+    // MARK: Deleting
+
+    /// The first click asks; a second click within a few seconds deletes.
+    @objc private func deleteClicked() {
+        guard let deleteButton else { return }
+        if confirmingDelete { return deleteForGood() }
+        confirmingDelete = true
+        // Same width as "删除", so the bar doesn't need laying out again.
+        deleteButton.title = "确认"
+        deleteButton.contentTintColor = .systemRed
+        deleteButton.image = NSImage(systemSymbolName: "trash.fill", accessibilityDescription: "确认删除")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, confirmingDelete else { return }
+            confirmingDelete = false
+            deleteButton.title = "删除"
+            deleteButton.contentTintColor = nil
+            deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "删除")
+        }
+    }
+
+    /// Stops playing, then removes the recording from history, video and all (not into the
+    /// basket), and fades away.
+    private func deleteForGood() {
+        guard let historyID else { return }
+        player.pause()
+        player.removeAllItems()
+        HistoryLibrary.shared.deletePermanently([historyID])
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated { self?.close() }
+        })
+    }
 }
 
 /// "拖出": drag the recording (an MP4 file) into another app.

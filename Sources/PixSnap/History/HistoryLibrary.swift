@@ -29,8 +29,14 @@ final class HistoryLibrary {
     @ObservationIgnored private var pendingDeletions: Set<UUID> = []
 
     private init() {
-        folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("PixSnap/History", isDirectory: true)
+        // Development: `--history-dir <folder>` keeps history somewhere else (demo screenshots).
+        let arguments = CommandLine.arguments
+        if let flag = arguments.firstIndex(of: "--history-dir"), arguments.indices.contains(flag + 1) {
+            folder = URL(fileURLWithPath: arguments[flag + 1], isDirectory: true)
+        } else {
+            folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("PixSnap/History", isDirectory: true)
+        }
         originals = folder.appendingPathComponent("originals", isDirectory: true)
         thumbnails = folder.appendingPathComponent("thumbnails", isDirectory: true)
         do {

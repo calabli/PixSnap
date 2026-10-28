@@ -3,8 +3,8 @@ import NaturalLanguage
 import PixSnapCore
 import Vision
 
-/// Finds the text in a screenshot with Vision, on this Mac: Chinese (simplified and traditional)
-/// and English, accurate mode. Lines come back top to bottom, left to right.
+/// Finds the text in a screenshot with Vision, on this Mac: accurate mode, the language worked out
+/// from the image (Chinese, simplified and traditional, and English first). Lines come back top to bottom, left to right.
 enum TextRecognizer {
     static func text(in image: CGImage) async -> String {
         await Task.detached(priority: .utility) { readLines(image).map(\.candidate.string).joined(separator: "\n") }.value
@@ -49,6 +49,8 @@ enum TextRecognizer {
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
         request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
+        // Putting Chinese first misreads English ("Screensnots"); guessing per image reads both.
+        request.automaticallyDetectsLanguage = true
         do {
             try VNImageRequestHandler(cgImage: image).perform([request])
         } catch {

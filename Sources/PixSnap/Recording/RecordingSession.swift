@@ -30,12 +30,15 @@ final class RecordingSession {
     func start() async {
         let settings = AppSettings.shared
         do {
-            let recorder = try await ScreenCapturer.shared.makeRecorder(for: region, on: screen, fps: settings.recordingFPS,
-                                                                        showsCursor: settings.recordsCursor)
-            self.recorder = recorder
+            // On screen first, so the recording can leave out just these two windows (and still show
+            // PixSnap's others: the clothesline, floating captures, the editor).
             outline.orderFrontRegardless()
             controls.place(near: region, on: screen)
             controls.orderFrontRegardless()
+            let recorder = try await ScreenCapturer.shared.makeRecorder(for: region, on: screen, fps: settings.recordingFPS,
+                                                                        showsCursor: settings.recordsCursor,
+                                                                        hiding: [outline.windowNumber, controls.windowNumber])
+            self.recorder = recorder
             try await recorder.start()
             started = Date()
             timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in

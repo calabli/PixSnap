@@ -27,7 +27,7 @@ final class PhotoPreviewWindow: NSPanel {
     private var card: CALayer?
     private let caption = NSTextField(labelWithString: "")
     private let hint = NSTextField(labelWithString: PhotoPreviewWindow.hintText)
-    private static let hintText = "← → 切换 · F 收藏 · B 大爆炸 · ⌘C 复制文字 · 空格或 Esc 关闭 · 点击图片浮动到屏幕上 · Delete 扔进洗衣篮"
+    private static let hintText = "← → 切换 · F 收藏 · B 大爆炸 · ⌘C 复制文字 · 空格或 Esc 关闭 · 点击图片浮动到屏幕上 · Delete 扔进洗衣篮 · ⌥⌘⌫ 永久删除"
     private var details = ""
     private var source: CGRect?
 

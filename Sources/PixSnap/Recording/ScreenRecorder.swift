@@ -3,7 +3,7 @@ import PixSnapCore
 import ScreenCaptureKit
 
 /// Records a region of a display to an MP4 (H.264) file: ScreenCaptureKit streams the region's
-/// frames, leaving PixSnap's own windows out, and AVAssetWriter encodes them as they come.
+/// frames (leaving out the recording's own frame and controls), and AVAssetWriter encodes them as they come.
 final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
     /// The file being written, in Caches until saved somewhere.
     let url: URL

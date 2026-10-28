@@ -88,7 +88,7 @@ final class CaptureCoordinator {
                   let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }
             let size = CGSize(width: CGFloat(entry.pixelWidth) / entry.scale, height: CGFloat(entry.pixelHeight) / entry.scale)
             showRecording(video, duration: duration, pixelSize: CGSize(width: entry.pixelWidth, height: entry.pixelHeight),
-                          near: ScreenGeometry.centered(size, in: screen.visibleFrame), on: screen)
+                          near: ScreenGeometry.centered(size, in: screen.visibleFrame), on: screen, historyID: entry.id)
             return
         }
         guard let capture = HistoryLibrary.shared.loadCapture(entry),
@@ -109,6 +109,7 @@ final class CaptureCoordinator {
         if CommandLine.arguments.contains("--select-text") { floatingCaptures.last?.selectText() }
         if CommandLine.arguments.contains("--bigbang") { floatingCaptures.last?.bigBangNow() }
         if CommandLine.arguments.contains("--beautify") { floatingCaptures.last?.beautifyNow() }
+        if CommandLine.arguments.contains("--translate") { floatingCaptures.last?.translateNow() }
     }
 
     /// Development: what 美化 makes of an image file — its guess printed, every style written to
@@ -256,14 +257,14 @@ final class CaptureCoordinator {
             let entry = HistoryLibrary.shared.addRecording(url, duration: duration, pixelSize: size, scale: screen.backingScaleFactor,
                                                            sourceApp: sourceApp)
             let video = entry.flatMap { HistoryLibrary.shared.videoURL(for: $0) } ?? url
-            showRecording(video, duration: duration, pixelSize: size, near: region, on: screen)
+            showRecording(video, duration: duration, pixelSize: size, near: region, on: screen, historyID: entry?.id)
         }
         recording = session
         Task { await session.start() }
     }
 
-    private func showRecording(_ video: URL, duration: Double, pixelSize: CGSize, near region: CGRect, on screen: NSScreen) {
-        let window = RecordingResultWindow(video: video, duration: duration, pixelSize: pixelSize, near: region, on: screen)
+    private func showRecording(_ video: URL, duration: Double, pixelSize: CGSize, near region: CGRect, on screen: NSScreen, historyID: UUID?) {
+        let window = RecordingResultWindow(video: video, duration: duration, pixelSize: pixelSize, near: region, on: screen, historyID: historyID)
         window.onClosed = { [weak self] closed in self?.recordingResults.removeAll { $0 === closed } }
         recordingResults.append(window)
         window.orderFrontRegardless()
@@ -276,11 +277,12 @@ final class CaptureCoordinator {
         startRecording(in: region, on: screen)
         if let gif, let session = recording {
             let show = session.onFinish
+            // Exported before it's shown: keeping it in history moves the video.
             session.onFinish = { result in
-                show(result)
-                guard let (url, duration) = result else { return }
+                guard let (url, duration) = result else { return show(result) }
                 Task {
                     do { try await GIFExporter.export(url, duration: duration, to: gif) } catch { NSLog("PixSnap GIF export failed: \(error)") }
+                    show(result)
                 }
             }
         }
@@ -478,6 +480,17 @@ final class CaptureCoordinator {
         pin(capture, at: imageFrame, on: frozen.screen, historyID: entry?.id)
     }
 
+    /// A finished image (美化, 翻译) floating over where its original is, and kept in history.
+    private func keep(_ finished: Capture, over window: FloatingCaptureWindow, screen: NSScreen) {
+        let entry = HistoryLibrary.shared.add(finished, sourceApp: nil)
+        let original = window.imageFrame, visible = (window.screen ?? screen).visibleFrame
+        let fit = min(1, (visible.height - 60) / finished.pointSize.height, (visible.width - 40) / finished.pointSize.width)
+        let size = CGSize(width: (finished.pointSize.width * fit).rounded(), height: (finished.pointSize.height * fit).rounded())
+        let x = min(max(original.midX - size.width / 2, visible.minX + 10), visible.maxX - size.width - 10)
+        let y = min(max(original.midY - size.height / 2, visible.minY + 50), visible.maxY - size.height - 10)
+        pin(finished, at: CGRect(x: x, y: y, width: size.width, height: size.height), on: window.screen ?? screen, historyID: entry?.id)
+    }
+
     private func pin(
         _ capture: Capture,
         history: EditHistory<AnnotationDocument>? = nil,
@@ -495,14 +508,12 @@ final class CaptureCoordinator {
         floating.onBeautify = { [weak self] window, result in
             let source = window.historyID.flatMap { HistoryLibrary.shared.sourceAppName(for: $0) }
             BeautifyWindow.show(result, sourceApp: source, near: window.imageFrame, on: window.screen ?? screen) { finished in
-                // The finished one floats over where the original is, and goes into history.
-                let entry = HistoryLibrary.shared.add(finished, sourceApp: nil)
-                let original = window.imageFrame, visible = (window.screen ?? screen).visibleFrame
-                let fit = min(1, (visible.height - 60) / finished.pointSize.height, (visible.width - 40) / finished.pointSize.width)
-                let size = CGSize(width: (finished.pointSize.width * fit).rounded(), height: (finished.pointSize.height * fit).rounded())
-                let x = min(max(original.midX - size.width / 2, visible.minX + 10), visible.maxX - size.width - 10)
-                let y = min(max(original.midY - size.height / 2, visible.minY + 50), visible.maxY - size.height - 10)
-                self?.pin(finished, at: CGRect(x: x, y: y, width: size.width, height: size.height), on: window.screen ?? screen, historyID: entry?.id)
+                self?.keep(finished, over: window, screen: screen)
+            }
+        }
+        floating.onTranslate = { [weak self] window, result in
+            TranslateWindow.show(result, near: window.imageFrame, on: window.screen ?? screen) { finished in
+                self?.keep(finished, over: window, screen: screen)
             }
         }
         floating.onClosed = { [weak self] window in self?.floatingCaptures.removeAll { $0 === window } }

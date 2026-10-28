@@ -230,6 +230,8 @@ final class BasketView: NSView {
 @MainActor
 final class BasketPanel: NSView {
     var onRestore: (([HistoryEntry]) -> Void)?
+    /// One capture deleted for good.
+    var onDelete: ((HistoryEntry) -> Void)?
     var onEmpty: (() -> Void)?
 
     private static let cellSize = CGSize(width: 88, height: 74)
@@ -246,7 +248,7 @@ final class BasketPanel: NSView {
         let shown = Array(entries.prefix(Self.columns * 4))
         let rows = max(1, Int(ceil(Double(shown.count) / Double(Self.columns))))
         let width = Self.padding * 2 + CGFloat(min(Self.columns, max(shown.count, 3))) * Self.cellSize.width
-        let height = Self.padding * 2 + 26 + CGFloat(rows) * Self.cellSize.height + 36
+        let height = Self.padding * 2 + 26 + 18 + CGFloat(rows) * Self.cellSize.height + 36
         super.init(frame: CGRect(x: 0, y: 0, width: width, height: height))
         wantsLayer = true
         layer?.backgroundColor = NSColor(white: 0.1, alpha: 0.88).cgColor
@@ -261,19 +263,21 @@ final class BasketPanel: NSView {
         title.setFrameOrigin(CGPoint(x: Self.padding, y: height - Self.padding - title.frame.height))
         addSubview(title)
 
-        let note = NSTextField(labelWithString: "点一下挂回绳上 · \(HistoryLibrary.basketDays) 天后自动清理")
+        let note = NSTextField(labelWithString: "点一下挂回绳上 · 点 × 删除 · \(HistoryLibrary.basketDays) 天后自动清理")
         note.font = .systemFont(ofSize: 11)
         note.textColor = NSColor(white: 1, alpha: 0.6)
         note.sizeToFit()
-        note.setFrameOrigin(CGPoint(x: width - Self.padding - note.frame.width, y: title.frame.minY + 1))
+        // On its own line under the title, so it fits however narrow the basket is.
+        note.setFrameOrigin(CGPoint(x: Self.padding, y: title.frame.minY - 4 - note.frame.height))
         addSubview(note)
 
         for (index, entry) in shown.enumerated() {
             let column = index % Self.columns, row = index / Self.columns
             let cell = BasketCell(entry: entry)
             cell.setFrameOrigin(CGPoint(x: Self.padding + CGFloat(column) * Self.cellSize.width,
-                                        y: title.frame.minY - 8 - CGFloat(row + 1) * Self.cellSize.height))
+                                        y: note.frame.minY - 8 - CGFloat(row + 1) * Self.cellSize.height))
             cell.onClick = { [weak self] entry in self?.onRestore?([entry]) }
+            cell.onDelete = { [weak self] entry in self?.onDelete?(entry) }
             addSubview(cell)
         }
 
@@ -360,11 +364,16 @@ final class BasketPanel: NSView {
     }
 }
 
-/// One capture in the basket, with how long it has left.
+/// One capture in the basket, with how long it has left. Hovering shows an × that deletes it for
+/// good (a second click confirms); right-click has the same, and hanging it back.
 @MainActor
 private final class BasketCell: NSView {
     var onClick: ((HistoryEntry) -> Void)?
+    var onDelete: ((HistoryEntry) -> Void)?
     private let entry: HistoryEntry
+    private let left = NSTextField(labelWithString: "")
+    private let deleteButton = NSButton()
+    private var confirmingDelete = false
 
     init(entry: HistoryEntry) {
         self.entry = entry
@@ -384,13 +393,62 @@ private final class BasketCell: NSView {
         picture.cornerRadius = 2
         layer?.addSublayer(picture)
 
-        let left = NSTextField(labelWithString: Self.remaining(for: entry))
+        left.stringValue = Self.remaining(for: entry)
         left.font = .systemFont(ofSize: 10)
         left.textColor = NSColor(white: 1, alpha: 0.6)
         left.alignment = .center
         left.frame = CGRect(x: 0, y: 2, width: bounds.width, height: 14)
         addSubview(left)
         toolTip = "挂回绳上"
+
+        deleteButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "永久删除")
+        deleteButton.isBordered = false
+        deleteButton.imageScaling = .scaleProportionallyUpOrDown
+        deleteButton.contentTintColor = NSColor(white: 0.85, alpha: 1)
+        deleteButton.frame = CGRect(x: bounds.width - 20, y: bounds.height - 20, width: 18, height: 18)
+        deleteButton.target = self
+        deleteButton.action = #selector(deleteClicked)
+        deleteButton.toolTip = "永久删除（点两下确认）"
+        deleteButton.isHidden = true
+        addSubview(deleteButton)
+    }
+
+    /// The first click asks; a second click within a few seconds deletes.
+    @objc private func deleteClicked() {
+        if confirmingDelete { return onDelete?(entry) ?? () }
+        confirmingDelete = true
+        deleteButton.contentTintColor = .systemRed
+        left.stringValue = "再点一下删除"
+        left.textColor = .systemRed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, confirmingDelete else { return }
+            confirmingDelete = false
+            deleteButton.contentTintColor = NSColor(white: 0.85, alpha: 1)
+            left.stringValue = Self.remaining(for: entry)
+            left.textColor = NSColor(white: 1, alpha: 0.6)
+            deleteButton.isHidden = !isHovered
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let restore = NSMenuItem(title: "挂回绳上", action: #selector(restoreFromMenu), keyEquivalent: "")
+        restore.target = self
+        menu.addItem(restore)
+        let delete = NSMenuItem(title: "永久删除", action: #selector(deleteFromMenu), keyEquivalent: "")
+        delete.target = self
+        menu.addItem(delete)
+        return menu
+    }
+
+    @objc private func restoreFromMenu() { onClick?(entry) }
+    @objc private func deleteFromMenu() { onDelete?(entry) }
+
+    private var isHovered = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        return hit === deleteButton ? deleteButton : self
     }
 
     @available(*, unavailable)
@@ -411,7 +469,18 @@ private final class BasketCell: NSView {
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
-    override func mouseEntered(with event: NSEvent) { layer?.backgroundColor = NSColor(white: 1, alpha: 0.1).cgColor; layer?.cornerRadius = 6 }
-    override func mouseExited(with event: NSEvent) { layer?.backgroundColor = nil }
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        layer?.backgroundColor = NSColor(white: 1, alpha: 0.1).cgColor
+        layer?.cornerRadius = 6
+        deleteButton.isHidden = false
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        layer?.backgroundColor = nil
+        if !confirmingDelete { deleteButton.isHidden = true }
+    }
+
     override func mouseUp(with event: NSEvent) { onClick?(entry) }
 }

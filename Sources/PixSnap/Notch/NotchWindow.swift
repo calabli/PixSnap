@@ -739,6 +739,7 @@ final class NotchWindow: NSPanel {
         let panel = BasketPanel(entries: entries)
         panel.onRestore = { [weak self] entries in self?.hangBack(entries) }
         panel.onEmpty = { [weak self] in self?.emptyBasket() }
+        panel.onDelete = { [weak self] entry in self?.deleteFromBasket(entry) }
         let rest = basketRestFrame
         let x = min(max(rest.midX - panel.frame.width / 2, 12), content.bounds.width - panel.frame.width - 12)
         panel.setFrameOrigin(CGPoint(x: x, y: rest.maxY + 28))
@@ -750,6 +751,16 @@ final class NotchWindow: NSPanel {
     private func closeBasketPanel() {
         basketPanel?.disappear()
         basketPanel = nil
+    }
+
+    /// One capture in the basket deleted for good; the basket opens again on the rest.
+    private func deleteFromBasket(_ entry: HistoryEntry) {
+        closeBasketPanel()
+        TrashSound.emptyTrash.play()
+        HistoryLibrary.shared.deletePermanently([entry.id])
+        thrown.removeAll { $0 == entry }
+        updateBasket()
+        toggleBasketPanel()
     }
 
     /// The basket tips out, then the captures are deleted for good and it sinks away.

@@ -20,6 +20,7 @@ final class FloatingCaptureWindow: NSPanel {
     var onEdit: ((FloatingCaptureWindow) -> Void)?
     /// 美化 with the image as it looks now.
     var onBeautify: ((FloatingCaptureWindow, Capture) -> Void)?
+    var onTranslate: ((FloatingCaptureWindow, Capture) -> Void)?
     var onClosed: ((FloatingCaptureWindow) -> Void)?
 
     let capture: Capture
@@ -97,6 +98,7 @@ final class FloatingCaptureWindow: NSPanel {
         bar.onCopy = { [weak self] in self?.copyImage() }
         bar.onBigBang = { [weak self] in self?.bigBang() }
         bar.onBeautify = { [weak self] in self?.beautify() }
+        bar.onTranslate = { [weak self] in self?.translate() }
         bar.onCopyText = { [weak self] in
             guard let self else { return }
             setSelectsText(!selectsText)
@@ -314,6 +316,7 @@ final class FloatingCaptureWindow: NSPanel {
             ("选取文字", #selector(selectTextFromMenu)),
             ("大爆炸", #selector(bigBangFromMenu)),
             ("美化", #selector(beautifyFromMenu)),
+            ("翻译", #selector(translateFromMenu)),
             ("保存", #selector(saveFromMenu)),
         ]
         if historyID != nil { items.insert((isFavorite ? "取消收藏" : "收藏", #selector(favoriteFromMenu)), at: 1) }
@@ -431,6 +434,18 @@ final class FloatingCaptureWindow: NSPanel {
     }
 
     @objc private func beautifyFromMenu() { beautify() }
+
+    /// 截图翻译: the text translated and written over the original, in a panel.
+    private func translate() {
+        guard let result = renderedCapture() else { return }
+        setSelectsText(false)
+        onTranslate?(self, result)
+    }
+
+    @objc private func translateFromMenu() { translate() }
+
+    /// Opens 截图翻译 without a click (`--pin … --translate`).
+    func translateNow() { translate() }
 
     /// Opens 美化 without a click (`--pin … --beautify`).
     func beautifyNow() { beautify() }
@@ -554,6 +569,7 @@ private final class ActionBar: NSVisualEffectView {
     var onCopyText: (() -> Void)?
     var onBigBang: (() -> Void)?
     var onBeautify: (() -> Void)?
+    var onTranslate: (() -> Void)?
     var onSave: (() -> Void)?
     var onClose: (() -> Void)?
     /// The delete button was clicked twice: delete for good.
@@ -618,6 +634,7 @@ private final class ActionBar: NSVisualEffectView {
             button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
             selectTextButtonView(),
             button(nil, symbol: "sparkles", tip: "大爆炸：把图里的文字炸成一个个词，点选后复制或搜索", action: #selector(bigBang)),
+            button(nil, symbol: "translate", tip: "截图翻译：把图里的文字翻译后写回原来的位置，在本机完成", action: #selector(translate)),
             button("美化", symbol: "wand.and.stars", tip: "智能美化：识别截图内容（代码、文档、照片、界面…），配上合适的背景、圆角和阴影", action: #selector(beautify)),
             dragHandle(),
             button("保存", symbol: "square.and.arrow.down", tip: "保存为 PNG，选择保存位置", action: #selector(save)),
@@ -663,20 +680,19 @@ private final class ActionBar: NSVisualEffectView {
         favoriteButton.toolTip = favorite ? "取消收藏" : "收藏：不会被自动清理，晾衣架上换成木夹子"
     }
 
+    /// An icon; its name and what it does show when the pointer rests on it.
     private func button(_ title: String?, symbol: String, tip: String, action: Selector) -> NSButton {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title ?? tip)!
-        let button = title.map { NSButton(title: $0, image: image, target: self, action: action) }
-            ?? NSButton(image: image, target: self, action: action)
+        let button = NSButton(image: image, target: self, action: action)
         button.bezelStyle = .recessed
         button.showsBorderOnlyWhileMouseInside = true
-        button.imagePosition = title == nil ? .imageOnly : .imageLeading
-        button.imageHugsTitle = true
-        button.font = .systemFont(ofSize: 12)
-        button.toolTip = tip
+        button.imagePosition = .imageOnly
+        button.toolTip = title.map { tip.contains($0) ? tip : "\($0)：\(tip)" } ?? tip
         return button
     }
 
     private var selectTextButton: NSButton!
+    private static var deleteTip: String?
 
     private func selectTextButtonView() -> NSButton {
         selectTextButton = button(nil, symbol: "text.viewfinder", tip: "选取文字：像文档一样选择图里的文字并复制（再点一下退出）", action: #selector(copyText))
@@ -690,6 +706,7 @@ private final class ActionBar: NSVisualEffectView {
 
     private func deleteButtonView() -> NSButton {
         deleteButton = button("删除", symbol: "trash", tip: "从截图历史里永久删除，不进洗衣篮（点两下确认）", action: #selector(deleteClicked))
+        Self.deleteTip = deleteButton.toolTip
         return deleteButton
     }
 
@@ -700,15 +717,14 @@ private final class ActionBar: NSVisualEffectView {
             return
         }
         confirmingDelete = true
-        // Same width as "删除", so the bar doesn't need laying out again.
-        deleteButton.title = "确认"
         deleteButton.contentTintColor = .systemRed
+        deleteButton.toolTip = "再点一下永久删除"
         deleteButton.image = NSImage(systemSymbolName: "trash.fill", accessibilityDescription: "确认删除")
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, confirmingDelete else { return }
             confirmingDelete = false
-            deleteButton.title = "删除"
             deleteButton.contentTintColor = nil
+            deleteButton.toolTip = Self.deleteTip
             deleteButton.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "删除")
         }
     }
@@ -751,6 +767,7 @@ private final class ActionBar: NSVisualEffectView {
     @objc private func copyText() { onCopyText?() }
     @objc private func bigBang() { onBigBang?() }
     @objc private func beautify() { onBeautify?() }
+    @objc private func translate() { onTranslate?() }
     @objc private func save() { onSave?() }
     @objc private func closeCapture() { onClose?() }
 }
@@ -763,13 +780,11 @@ private final class DragHandle: NSView {
     private let label: NSButton
 
     init() {
-        // A borderless button draws the same icon-and-title as its neighbors; it doesn't take clicks.
-        label = NSButton(title: "拖出", image: NSImage(systemSymbolName: "hand.draw", accessibilityDescription: "拖出")!, target: nil, action: nil)
+        // A borderless button draws the same icon as its neighbors; it doesn't take clicks.
+        label = NSButton(image: NSImage(systemSymbolName: "hand.draw", accessibilityDescription: "拖出")!, target: nil, action: nil)
         label.bezelStyle = .recessed
         label.isBordered = false
-        label.imagePosition = .imageLeading
-        label.imageHugsTitle = true
-        label.font = .systemFont(ofSize: 12)
+        label.imagePosition = .imageOnly
         super.init(frame: .zero)
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
@@ -781,7 +796,7 @@ private final class DragHandle: NSView {
         ])
         wantsLayer = true
         layer?.cornerRadius = 5
-        toolTip = "按住拖到微信、邮件、访达等应用（也可以按住 ⌘ 拖图片）"
+        toolTip = "拖出：按住拖到微信、邮件、访达等应用（也可以按住 ⌘ 拖图片）"
     }
 
     @available(*, unavailable)
