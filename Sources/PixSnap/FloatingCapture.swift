@@ -433,7 +433,7 @@ final class FloatingCaptureWindow: NSPanel {
 /// The row under a floating capture: quick tools and undo, then edit mode, copy, save and close.
 @MainActor
 private final class ActionBar: NSVisualEffectView {
-    static let quickTools: [EditorTool] = [.rectangle, .arrow, .text, .mosaic, .counter]
+    static let quickTools: [EditorTool] = [.rectangle, .arrow, .pen, .highlight, .text, .mosaic, .counter]
 
     /// `.select` means no tool: dragging moves the image.
     var onTool: ((EditorTool) -> Void)?

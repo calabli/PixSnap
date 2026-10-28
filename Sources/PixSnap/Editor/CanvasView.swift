@@ -37,6 +37,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
     private let base: CGImage
     private let scale: CGFloat
     private lazy var pixelated: CGImage? = AnnotationRenderer.pixelated(base, scale: scale)
+    private lazy var blurred: CGImage? = AnnotationRenderer.blurred(base, scale: scale)
 
     /// The document while a drag is in progress; committed as one undo step on mouse up.
     private var transient: AnnotationDocument?
@@ -48,6 +49,8 @@ final class CanvasView: NSView, NSTextFieldDelegate {
 
     private enum Drag {
         case create(id: Annotation.ID, from: CGPoint)
+        /// A freehand stroke (pen, highlighter) gathering points.
+        case stroke(id: Annotation.ID, points: [CGPoint])
         case move(original: Annotation, from: CGPoint)
         case crop(from: CGPoint)
     }
@@ -108,7 +111,9 @@ final class CanvasView: NSView, NSTextFieldDelegate {
 
     func renderedImage() -> CGImage? {
         endTextEditing()
-        return AnnotationRenderer.render(history.current, base: base, pixelated: pixelated, scale: scale)
+        let document = history.current
+        return AnnotationRenderer.render(document, base: base, pixelated: uses(.mosaic, in: document) ? pixelated : nil,
+                                         blurred: uses(.blur, in: document) ? blurred : nil, scale: scale)
     }
 
     // MARK: Drawing
@@ -123,7 +128,8 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         AnnotationRenderer.draw(
             document,
             base: base,
-            pixelated: document.annotations.contains(where: { if case .mosaic = $0.shape { true } else { false } }) ? pixelated : nil,
+            pixelated: uses(.mosaic, in: document) ? pixelated : nil,
+            blurred: uses(.blur, in: document) ? blurred : nil,
             in: context,
             hiding: editingText?.id
         )
@@ -186,6 +192,17 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         )
     }
 
+    /// Whether the document has mosaic or blur annotations, which need their filtered copy (made
+    /// only once one is used, since it takes a moment).
+    private func uses(_ tool: EditorTool, in document: AnnotationDocument) -> Bool {
+        document.annotations.contains { annotation in
+            switch (tool, annotation.shape) {
+            case (.mosaic, .mosaic), (.blur, .blur): true
+            default: false
+            }
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
         endTextEditing()
         window?.makeFirstResponder(self)
@@ -213,8 +230,10 @@ final class CanvasView: NSView, NSTextFieldDelegate {
                 if event.clickCount == 1, window?.frame.origin == origin { onIdleClick?() }
                 return
             }
-        case .rectangle, .arrow, .mosaic:
+        case .rectangle, .ellipse, .arrow, .line, .mosaic, .blur, .magnifier:
             drag = .create(id: UUID(), from: point)
+        case .pen, .highlight:
+            drag = .stroke(id: UUID(), points: [point])
         case .crop:
             drag = .crop(from: point)
         case .text:
@@ -245,11 +264,26 @@ final class CanvasView: NSView, NSTextFieldDelegate {
 
         switch drag {
         case .create(let id, let from):
-            let rect = SelectionGeometry.rect(from: from, to: point)
+            // Shift: lines and arrows snap to 45°, ellipses become circles, rectangles squares.
+            let shift = event.modifierFlags.contains(.shift)
+            let end = shift ? Annotation.snapped(from: from, to: point) : point
+            var rect = SelectionGeometry.rect(from: from, to: point)
+            if shift {
+                let side = max(rect.width, rect.height)
+                rect = CGRect(x: point.x < from.x ? from.x - side : from.x, y: point.y < from.y ? from.y - side : from.y, width: side, height: side)
+            }
+            let long = hypot(end.x - from.x, end.y - from.y) >= SelectionGeometry.minimumDragSize
             let shape: AnnotationShape? = switch tool {
             case .rectangle where SelectionGeometry.isDrag(rect): .rectangle(rect)
+            case .ellipse where SelectionGeometry.isDrag(rect): .ellipse(rect)
             case .mosaic where SelectionGeometry.isDrag(rect): .mosaic(rect)
-            case .arrow where hypot(point.x - from.x, point.y - from.y) >= SelectionGeometry.minimumDragSize: .arrow(from: from, to: point)
+            case .blur where SelectionGeometry.isDrag(rect): .blur(rect)
+            case .arrow where long: .arrow(from: from, to: end)
+            case .line where long: .line(from: from, to: end)
+            // The lens is round: dragged out from its center.
+            case .magnifier where long:
+                .magnifier(CGRect(x: from.x - hypot(point.x - from.x, point.y - from.y), y: from.y - hypot(point.x - from.x, point.y - from.y),
+                                  width: 2 * hypot(point.x - from.x, point.y - from.y), height: 2 * hypot(point.x - from.x, point.y - from.y)))
             default: nil
             }
             guard let shape else {
@@ -257,6 +291,13 @@ final class CanvasView: NSView, NSTextFieldDelegate {
                 needsDisplay = true
                 return
             }
+            document.add(Annotation(id: id, shape: shape, color: color, lineWidth: strokeWidth.lineWidth))
+        case .stroke(let id, var points):
+            // Skip points too close to the last one; they only add jitter.
+            guard let last = points.last, hypot(point.x - last.x, point.y - last.y) >= 1.5 else { return }
+            points.append(point)
+            self.drag = .stroke(id: id, points: points)
+            let shape: AnnotationShape = tool == .highlight ? .highlight(points) : .pen(points)
             document.add(Annotation(id: id, shape: shape, color: color, lineWidth: strokeWidth.lineWidth))
         case .move(let original, let from):
             document.update(original.translated(dx: point.x - from.x, dy: point.y - from.y))

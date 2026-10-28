@@ -105,4 +105,35 @@ final class AnnotationRendererTests: XCTestCase {
         CGImageDestinationAddImage(destination, output, nil)
         XCTAssertTrue(CGImageDestinationFinalize(destination))
     }
+
+    func testNewShapesDraw() throws {
+        let base = makeBase()
+        var document = AnnotationDocument(canvasSize: CGSize(width: 200, height: 100))
+        // A red pen stroke and a line across the white half.
+        document.add(Annotation(shape: .pen([CGPoint(x: 10, y: 20), CGPoint(x: 50, y: 20), CGPoint(x: 90, y: 20)]), color: .red, lineWidth: 4))
+        document.add(Annotation(shape: .line(from: CGPoint(x: 10, y: 60), to: CGPoint(x: 90, y: 60)), color: .blue, lineWidth: 4))
+        // A yellow marker: see-through, so white under it turns pale yellow, not solid.
+        document.add(Annotation(shape: .highlight([CGPoint(x: 10, y: 85), CGPoint(x: 90, y: 85)]), color: .yellow, lineWidth: 2))
+        let output = try XCTUnwrap(AnnotationRenderer.render(document, base: base, pixelated: nil, scale: 2))
+        XCTAssertEqual(pixel(output, 100, 40).r, 242)
+        XCTAssertEqual(pixel(output, 100, 40).g, 59)
+        XCTAssertEqual(pixel(output, 100, 120).b, 255)
+        let marked = pixel(output, 100, 170)
+        XCTAssertEqual(marked.r, 255)
+        XCTAssertGreaterThan(marked.b, 100)
+        XCTAssertLessThan(marked.b, 200)
+    }
+
+    func testMagnifierShowsTheMiddleEnlarged() throws {
+        // A lens centered where the white half meets the checkerboard: enlarged, the boundary
+        // stays at the center, and a point a quarter-lens to the right shows the checkerboard.
+        let base = makeBase()
+        var document = AnnotationDocument(canvasSize: CGSize(width: 200, height: 100))
+        document.add(Annotation(shape: .magnifier(CGRect(x: 60, y: 10, width: 80, height: 80)), color: .red, lineWidth: 2))
+        let output = try XCTUnwrap(AnnotationRenderer.render(document, base: base, pixelated: nil, scale: 2))
+        // Left of center inside the lens: white.
+        XCTAssertEqual(pixel(output, 2 * 90, 2 * 50).r, 255)
+        // Outside the lens, top-left corner: unchanged white.
+        XCTAssertEqual(pixel(output, 4, 4).r, 255)
+    }
 }

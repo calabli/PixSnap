@@ -38,6 +38,16 @@ public enum AnnotationShape: Equatable, Sendable {
     case text(String, frame: CGRect, fontSize: CGFloat)
     case counter(Int, center: CGPoint)
     case mosaic(CGRect)
+    /// A freehand stroke through these points.
+    case pen([CGPoint])
+    /// A see-through marker stroke, drawn wide and multiplied over what's under it.
+    case highlight([CGPoint])
+    case line(from: CGPoint, to: CGPoint)
+    case ellipse(CGRect)
+    /// What's inside is blurred, softer than the mosaic.
+    case blur(CGRect)
+    /// A round lens over its rect, showing what's under its middle at `zoom` times.
+    case magnifier(CGRect)
 }
 
 public struct Annotation: Identifiable, Equatable, Sendable {
@@ -57,12 +67,25 @@ public struct Annotation: Identifiable, Equatable, Sendable {
         10 + lineWidth * 1.5
     }
 
+    /// Marker strokes are this many times wider than the chosen line width.
+    public static let highlightWidthFactor: CGFloat = 4
+    /// How much the magnifier enlarges.
+    public static let magnifierZoom: CGFloat = 2
+
+    /// How wide the stroke actually is.
+    public var strokeWidth: CGFloat {
+        if case .highlight = shape { return lineWidth * Self.highlightWidthFactor }
+        return lineWidth
+    }
+
     public var bounds: CGRect {
         switch shape {
-        case .rectangle(let rect), .mosaic(let rect):
+        case .rectangle(let rect), .mosaic(let rect), .ellipse(let rect), .blur(let rect), .magnifier(let rect):
             return rect
-        case .arrow(let from, let to):
+        case .arrow(let from, let to), .line(let from, let to):
             return SelectionGeometry.rect(from: from, to: to)
+        case .pen(let points), .highlight(let points):
+            return Self.bounds(of: points).insetBy(dx: -strokeWidth / 2, dy: -strokeWidth / 2)
         case .text(_, let frame, _):
             return frame
         case .counter(_, let center):
@@ -78,9 +101,21 @@ public struct Annotation: Identifiable, Equatable, Sendable {
             let slack = tolerance + lineWidth / 2
             return rect.insetBy(dx: -slack, dy: -slack).contains(point)
                 && !rect.insetBy(dx: slack, dy: slack).contains(point)
-        case .arrow(let from, let to):
+        case .arrow(let from, let to), .line(let from, let to):
             return Self.distance(from: point, toSegmentFrom: from, to: to) <= tolerance + lineWidth / 2
-        case .text, .counter, .mosaic:
+        case .pen(let points), .highlight(let points):
+            let reach = tolerance + strokeWidth / 2
+            guard points.count > 1 else { return points.first.map { hypot(point.x - $0.x, point.y - $0.y) <= reach } ?? false }
+            return zip(points, points.dropFirst()).contains { Self.distance(from: point, toSegmentFrom: $0, to: $1) <= reach }
+        case .ellipse(let rect):
+            // Near the outline: the point's distance from the ellipse, measured along its radius.
+            let rx = max(rect.width / 2, 1), ry = max(rect.height / 2, 1)
+            let dx = (point.x - rect.midX) / rx, dy = (point.y - rect.midY) / ry
+            let r = (dx * dx + dy * dy).squareRoot()
+            return abs(r - 1) * min(rx, ry) <= tolerance + lineWidth / 2
+        case .magnifier(let rect):
+            return hypot(point.x - rect.midX, point.y - rect.midY) <= rect.width / 2 + tolerance
+        case .text, .counter, .mosaic, .blur:
             return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
         }
     }
@@ -92,6 +127,18 @@ public struct Annotation: Identifiable, Equatable, Sendable {
             moved.shape = .rectangle(rect.offsetBy(dx: dx, dy: dy))
         case .mosaic(let rect):
             moved.shape = .mosaic(rect.offsetBy(dx: dx, dy: dy))
+        case .ellipse(let rect):
+            moved.shape = .ellipse(rect.offsetBy(dx: dx, dy: dy))
+        case .blur(let rect):
+            moved.shape = .blur(rect.offsetBy(dx: dx, dy: dy))
+        case .magnifier(let rect):
+            moved.shape = .magnifier(rect.offsetBy(dx: dx, dy: dy))
+        case .pen(let points):
+            moved.shape = .pen(points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) })
+        case .highlight(let points):
+            moved.shape = .highlight(points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) })
+        case .line(let from, let to):
+            moved.shape = .line(from: CGPoint(x: from.x + dx, y: from.y + dy), to: CGPoint(x: to.x + dx, y: to.y + dy))
         case .arrow(let from, let to):
             moved.shape = .arrow(from: CGPoint(x: from.x + dx, y: from.y + dy), to: CGPoint(x: to.x + dx, y: to.y + dy))
         case .text(let string, let frame, let fontSize):
@@ -100,6 +147,21 @@ public struct Annotation: Identifiable, Equatable, Sendable {
             moved.shape = .counter(number, center: CGPoint(x: center.x + dx, y: center.y + dy))
         }
         return moved
+    }
+
+    static func bounds(of points: [CGPoint]) -> CGRect {
+        guard let first = points.first else { return .zero }
+        var rect = CGRect(origin: first, size: .zero)
+        for point in points.dropFirst() { rect = rect.union(CGRect(origin: point, size: .zero)) }
+        return rect
+    }
+
+    /// Where a line from `from` toward `to` ends when Shift snaps it to the nearest 45°.
+    public static func snapped(from: CGPoint, to: CGPoint) -> CGPoint {
+        let dx = to.x - from.x, dy = to.y - from.y
+        let length = hypot(dx, dy)
+        let angle = (atan2(dy, dx) / (.pi / 4)).rounded() * (.pi / 4)
+        return CGPoint(x: from.x + cos(angle) * length, y: from.y + sin(angle) * length)
     }
 
     static func distance(from point: CGPoint, toSegmentFrom a: CGPoint, to b: CGPoint) -> CGFloat {
