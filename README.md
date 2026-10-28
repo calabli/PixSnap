@@ -24,6 +24,12 @@ swift test
 scripts/package-dmg.sh
 ```
 
+也可以打成安装器格式（`build/PixSnap-<版本>.pkg`，用系统“安装器”打开，有介绍页、进度条和完成页，装进“应用程序”）：
+
+```bash
+scripts/package-pkg.sh
+```
+
 现在用开发证书签名、没有公证，别的 Mac 第一次打开会被拦下：在“系统设置 › 隐私与安全性”底部点“仍要打开”。
 
 ## 首次使用
