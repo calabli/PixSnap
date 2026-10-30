@@ -45,7 +45,7 @@ final class NotchController {
 
     /// Opens the clothesline on the screen under the cursor, without a gesture.
     func openOnScreenUnderMouse(previewingNewest: Bool = false, openingBasket: Bool = false, throwingNewest: Bool = false,
-                                searching: String? = nil) {
+                                searching: String? = nil, olderBy ropes: Int = 0) {
         let mouse = NSEvent.mouseLocation
         let screenWindow = windows.first { ScreenGeometry.screen($0.screenFrame, containsMouse: mouse) } ?? windows.first
         if let screenWindow {
@@ -54,6 +54,7 @@ final class NotchController {
             if openingBasket { screenWindow.openBasket() }
             if throwingNewest { screenWindow.throwNewest() }
             if let searching { screenWindow.searchNow(searching) }
+            if ropes > 0 { screenWindow.pageNow(by: ropes) }
         } else {
             // The handles are turned off: open a temporary one on this screen.
             guard let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }
@@ -72,13 +73,13 @@ final class NotchController {
         max(0, screen.frame.maxY - screen.visibleFrame.maxY)
     }
 
-    /// The days to hang: the latest captures, or with `query`, the ones whose text or app matches
-    /// (on the most recent days that have any). `found` counts every match.
+    /// The days to hang: every capture, or with `query`, the ones whose text or app matches. `found` counts every match.
     private static func days(matching query: String) -> NotchWindow.Lines {
         let settings = AppSettings.shared
         let searching = !query.trimmingCharacters(in: .whitespaces).isEmpty
-        let entries = searching ? HistoryLibrary.shared.search(query, limit: 500) : HistoryLibrary.shared.recent(limit: 200)
-        let days = HistoryGrouping.days(entries, now: Date(), limit: ClotheslineView.maximumDays)
+        // All of history, a scroll at a time.
+        let entries = searching ? HistoryLibrary.shared.search(query, limit: 3000) : HistoryLibrary.shared.recent(limit: 3000)
+        let days = HistoryGrouping.days(entries, now: Date(), limit: .max)
         let empty: String
         if searching {
             empty = settings.recognizesText ? "没有找到包含“\(query)”的截图。" : "没有找到。截图文字识别已在设置中关闭，只能按应用名搜索。"

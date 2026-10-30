@@ -25,7 +25,10 @@ final class ClotheslineView: NSView {
     /// The most recently taken capture on the lines (the end of the top line, not of the last one).
     var newestEntry: HistoryEntry? { entries.max { $0.createdAt < $1.createdAt } }
 
-    static let maximumDays = 3
+    /// Ropes on screen at once; older ones are a scroll away.
+    static let ropesOnScreen = 3
+    /// A day whose photos wouldn't all hang at least this tall carries on to another rope.
+    private static let splitHeight: CGFloat = 80
     /// Above the tallest photo on a line: the rope's distance from the top of its row, its dip,
     /// the gap between rope and photo, the swing room under the photo and the space before the
     /// next line.
@@ -59,18 +62,29 @@ final class ClotheslineView: NSView {
         static let empty = Plan(lines: [], height: 60)
     }
 
-    /// Fits `days` across a rope `width` wide, sharing `availableHeight` between the lines.
-    static func plan(_ days: [HistoryGrouping.Day], width: CGFloat, availableHeight: CGFloat) -> Plan {
-        guard !days.isEmpty else { return .empty }
+    /// Every day as ropes a `width` wide screen can hang, a day too full for one rope going on to
+    /// the next, so nothing is left off.
+    static func ropes(_ days: [HistoryGrouping.Day], width: CGFloat, availableHeight: CGFloat) -> [ClotheslineLayout.Rope] {
+        let height = min(splitHeight, maxPhotoHeight(lines: ropesOnScreen, availableHeight: availableHeight))
+        return ClotheslineLayout.ropes(days, ropeLength: width - ropeInset * 2, height: height, padding: photoPadding)
+    }
+
+    private static func maxPhotoHeight(lines: Int, availableHeight: CGFloat) -> CGFloat {
+        let perLine = (availableHeight - topPadding - bottomPadding) / CGFloat(max(lines, 1)) - rowOverhead
+        return min(largestPhoto, max(ClotheslineLayout.minimumRowHeight, perLine.rounded(.down)))
+    }
+
+    /// Fits `ropes` across a rope `width` wide, sharing `availableHeight` between the lines.
+    static func plan(_ ropes: [ClotheslineLayout.Rope], width: CGFloat, availableHeight: CGFloat) -> Plan {
+        guard !ropes.isEmpty else { return .empty }
         let ropeLength = width - ropeInset * 2
-        let perLine = (availableHeight - topPadding - bottomPadding) / CGFloat(days.count) - rowOverhead
-        let maxHeight = min(largestPhoto, max(ClotheslineLayout.minimumRowHeight, perLine.rounded(.down)))
-        let lines = days.map { day in
-            let sources = day.entries.map { CGSize(width: CGFloat($0.pixelWidth) / CGFloat(max($0.scale, 1)),
-                                                   height: CGFloat($0.pixelHeight) / CGFloat(max($0.scale, 1))) }
+        let maxHeight = maxPhotoHeight(lines: ropes.count, availableHeight: availableHeight)
+        let lines = ropes.map { rope in
+            let sources = rope.entries.map(ClotheslineLayout.pointSize)
             let sizes = ClotheslineLayout.photoSizes(pointSizes: sources, ropeLength: ropeLength, maxHeight: maxHeight, padding: photoPadding)
-            let photos = zip(day.entries.suffix(sizes.count), sizes).map { (entry: $0, size: $1) }
-            return Plan.Line(title: day.title, photos: photos, height: (sizes.map(\.height).max() ?? 0) + rowOverhead)
+            let photos = zip(rope.entries.suffix(sizes.count), sizes).map { (entry: $0, size: $1) }
+            return Plan.Line(title: rope.continued ? "\(rope.title) · 更早" : rope.title, photos: photos,
+                             height: (sizes.map(\.height).max() ?? 0) + rowOverhead)
         }
         return Plan(lines: lines, height: topPadding + lines.reduce(0) { $0 + $1.height } + bottomPadding)
     }

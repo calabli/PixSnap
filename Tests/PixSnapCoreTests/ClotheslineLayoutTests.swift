@@ -63,4 +63,31 @@ final class ClotheslineLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(sizes[0].width, 900)
         XCTAssertEqual(sizes[1], CGSize(width: 400, height: 400))
     }
+
+    private func shots(_ count: Int, minutesFrom start: Int = 0) -> [HistoryEntry] {
+        (0..<count).map { HistoryEntry(createdAt: Date(timeIntervalSince1970: Double(start + $0) * 60), pixelWidth: 400, pixelHeight: 400, scale: 2) }
+    }
+
+    func testFittingCountKeepsNewestThatFit() {
+        // 200pt squares at 80pt: each takes 80 + 32 gap, plus the first gap: 4 fit in 480.
+        let sizes = Array(repeating: CGSize(width: 200, height: 200), count: 10)
+        XCTAssertEqual(ClotheslineLayout.fittingCount(pointSizes: sizes, ropeLength: 480, height: 80), 4)
+        XCTAssertEqual(ClotheslineLayout.fittingCount(pointSizes: sizes, ropeLength: 10, height: 80), 1)
+    }
+
+    func testFullDayCarriesOnToMoreRopesNewestFirst() {
+        let today = shots(10, minutesFrom: 100)
+        let yesterday = shots(2)
+        let ropes = ClotheslineLayout.ropes([HistoryGrouping.Day(title: "今天", entries: today),
+                                             HistoryGrouping.Day(title: "昨天", entries: yesterday)],
+                                            ropeLength: 480, height: 80)
+        XCTAssertEqual(ropes.map(\.title), ["今天", "今天", "今天", "昨天"])
+        XCTAssertEqual(ropes.map(\.continued), [false, true, true, false])
+        XCTAssertEqual(ropes.map(\.entries.count), [4, 4, 2, 2])
+        // The newest on top, at the right end; nothing left out.
+        XCTAssertEqual(ropes[0].entries, Array(today.suffix(4)))
+        XCTAssertEqual(ropes[2].entries, Array(today.prefix(2)))
+        XCTAssertEqual(Set(ropes.flatMap(\.entries).map(\.id)).count, 12)
+    }
 }
+

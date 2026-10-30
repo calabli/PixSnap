@@ -44,6 +44,12 @@ final class NotchWindow: NSPanel {
     private let topInset: CGFloat
     private let search = SearchBox()
     private var query = ""
+    /// Every rope there is to hang, newest first, and the first one on screen.
+    private var ropes: [ClotheslineLayout.Rope] = []
+    private var ropeOffset = 0
+    private let pager = PagerView()
+    private var scrolled: CGFloat = 0
+    private var lastPage = Date.distantPast
 
     private let content = PassthroughContentView()
     private let handle = HandleView()
@@ -118,6 +124,9 @@ final class NotchWindow: NSPanel {
         search.onChange = { [weak self] text in self?.searchChanged(text) }
         search.onLeave = { [weak self] in self?.makeFirstResponder(nil) }
         content.addSubview(search)
+        pager.isHidden = true
+        pager.onPage = { [weak self] step in self?.page(by: step) }
+        content.addSubview(pager)
         content.addSubview(handle)
         contentView = content
     }
@@ -166,6 +175,10 @@ final class NotchWindow: NSPanel {
             }
         case 123, 124: // ← →
             stepPreview(by: event.keyCode == 123 ? -1 : 1)
+        case 125, 121: // ↓, Page Down: older ropes
+            if preview.entry == nil { page(by: 1) }
+        case 126, 116: // ↑, Page Up: newer
+            if preview.entry == nil { page(by: -1) }
         case 36, 76: // Return, Enter
             if let entry = preview.entry { pick(entry) }
         default:
@@ -260,6 +273,8 @@ final class NotchWindow: NSPanel {
     private func prepareLines() {
         query = ""
         search.reset()
+        ropeOffset = 0
+        pager.isHidden = true
         let (plan, lines) = planLines()
         let height = plan.height
         openFrame = screenFrame
@@ -284,6 +299,7 @@ final class NotchWindow: NSPanel {
         clothesline.frame = CGRect(x: 0, y: content.bounds.height - topInset - plan.height, width: content.bounds.width, height: plan.height)
         hang(plan, emptyMessage: lines.emptyMessage)
         search.found = lines.found
+        updatePager()
         if animated { clothesline.playDropAnimation(only: entry) }
     }
 
@@ -291,8 +307,64 @@ final class NotchWindow: NSPanel {
     private func planLines() -> (ClotheslineView.Plan, Lines) {
         let lines = loadDays?(query) ?? Lines(days: [], emptyMessage: "", found: nil)
         let visible = NSScreen.screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame
-        let available = visible.maxY - topInset - visible.minY - BasketView.size.height - 40
-        return (ClotheslineView.plan(lines.days, width: screenFrame.width, availableHeight: available), lines)
+        let available = visible.maxY - topInset - visible.minY - BasketView.size.height - 40 - PagerView.band
+        ropes = ClotheslineView.ropes(lines.days, width: screenFrame.width, availableHeight: available)
+        ropeOffset = min(ropeOffset, max(0, ropes.count - ClotheslineView.ropesOnScreen))
+        let shown = Array(ropes.dropFirst(ropeOffset).prefix(ClotheslineView.ropesOnScreen))
+        return (ClotheslineView.plan(shown, width: screenFrame.width, availableHeight: available), lines)
+    }
+
+    // MARK: Older ropes
+
+    /// Pages without scrolling (`--clothesline --older <n>`), after the lines settle.
+    func pageNow(by step: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.page(by: step) }
+    }
+
+    /// Moves `step` ropes toward older (positive) or newer captures; the new ones slide in.
+    private func page(by step: Int) {
+        guard case .open = phase else { return }
+        let target = min(max(ropeOffset + step, 0), max(0, ropes.count - ClotheslineView.ropesOnScreen))
+        guard target != ropeOffset else { return }
+        ropeOffset = target
+        reloadLines(dropping: nil, animated: false)
+        let settled = clothesline.frame.origin
+        clothesline.setFrameOrigin(CGPoint(x: settled.x, y: settled.y + (step > 0 ? -50 : 50)))
+        clothesline.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.28
+            context.timingFunction = Self.springTiming
+            clothesline.animator().setFrameOrigin(settled)
+            clothesline.animator().alphaValue = 1
+        }
+    }
+
+    /// Scrolling down (or swiping up) shows older ropes, a rope per flick.
+    override func scrollWheel(with event: NSEvent) {
+        guard case .open = phase, preview.entry == nil, basketPanel == nil else { return super.scrollWheel(with: event) }
+        // A flick's coasting would run through the whole history.
+        guard event.momentumPhase.isEmpty else { return }
+        if event.phase == .began { scrolled = 0 }
+        scrolled += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 60
+        guard abs(scrolled) >= 50, Date().timeIntervalSince(lastPage) > 0.22 else { return }
+        page(by: scrolled < 0 ? 1 : -1)
+        scrolled = 0
+        lastPage = Date()
+    }
+
+    /// Under the lines when there are more ropes than fit: how many older captures are left.
+    private func updatePager() {
+        guard case .open = phase, ropes.count > ClotheslineView.ropesOnScreen else {
+            pager.isHidden = true
+            return
+        }
+        let older = ropes.dropFirst(ropeOffset + ClotheslineView.ropesOnScreen).reduce(0) { $0 + $1.entries.count }
+        pager.update(older: older, canGoNewer: ropeOffset > 0)
+        let size = pager.fittingSize
+        pager.frame = CGRect(x: ((content.bounds.width - size.width) / 2).rounded(),
+                             y: content.bounds.height - topInset - clothesline.frame.height - PagerView.band + (PagerView.band - size.height) / 2,
+                             width: size.width, height: size.height)
+        pager.isHidden = false
     }
 
     // MARK: Search
@@ -303,6 +375,7 @@ final class NotchWindow: NSPanel {
         let work = DispatchWorkItem { [weak self] in
             guard let self, case .open = phase, text != query else { return }
             query = text
+            ropeOffset = 0
             reloadLines(dropping: nil, animated: false)
             // The photos still fade in, so the change reads as a new set.
             clothesline.alphaValue = 0
@@ -352,7 +425,13 @@ final class NotchWindow: NSPanel {
         updateBasket()
         search.isHidden = false
         search.alphaValue = 0
-        NSAnimationContext.runAnimationGroup { $0.duration = 0.25; search.animator().alphaValue = 1 }
+        updatePager()
+        pager.alphaValue = 0
+        NSAnimationContext.runAnimationGroup {
+            $0.duration = 0.25
+            search.animator().alphaValue = 1
+            pager.animator().alphaValue = 1
+        }
     }
 
     func collapse() {
@@ -373,6 +452,7 @@ final class NotchWindow: NSPanel {
         setBasketShown(false)
         stopWatchingOutsideClicks()
         search.isHidden = true
+        pager.isHidden = true
         searchWork?.cancel()
         handle.showsHint = false
         NSAnimationContext.runAnimationGroup({ context in
@@ -880,6 +960,60 @@ private final class HandleView: NSView {
     override func mouseDown(with event: NSEvent) { onMouseDown?() }
     override func mouseDragged(with event: NSEvent) { onMouseDragged?() }
     override func mouseUp(with event: NSEvent) { onMouseUp?() }
+}
+
+/// "更早的还有 37 张" under the lines, with ↑ / ↓ buttons, when there's more history than fits.
+@MainActor
+private final class PagerView: NSView {
+    /// Room kept for it under the lines.
+    static let band: CGFloat = 36
+
+    var onPage: ((Int) -> Void)?
+
+    private let label = NSTextField(labelWithString: "")
+    private lazy var newer = button("chevron.up", tip: "较新的（↑ 或往上滚动）", step: -1)
+    private lazy var older = button("chevron.down", tip: "更早的（↓ 或往下滚动）", step: 1)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = .white
+        let stack = NSStackView(views: [newer, label, older])
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 2, left: 6, bottom: 2, right: 6)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func update(older count: Int, canGoNewer: Bool) {
+        label.stringValue = count > 0 ? "更早的还有 \(count) 张" : "已经是最早的了"
+        older.isEnabled = count > 0
+        newer.isEnabled = canGoNewer
+        layoutSubtreeIfNeeded()
+        layer?.cornerRadius = fittingSize.height / 2
+    }
+
+    private func button(_ symbol: String, tip: String, step: Int) -> NSButton {
+        let button = NSButton(image: NSImage(systemSymbolName: symbol, accessibilityDescription: tip)!, target: self, action: #selector(clicked))
+        button.isBordered = false
+        button.contentTintColor = .white
+        button.tag = step
+        button.toolTip = tip
+        button.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        return button
+    }
+
+    @objc private func clicked(_ sender: NSButton) { onPage?(sender.tag) }
 }
 
 /// The search box above the lines: type to keep only the captures whose text (or app) has it.

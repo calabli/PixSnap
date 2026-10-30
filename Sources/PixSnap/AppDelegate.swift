@@ -78,7 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if arguments.contains("--clothesline") {
             notch.openOnScreenUnderMouse(previewingNewest: arguments.contains("--preview"), openingBasket: arguments.contains("--basket"),
                                          throwingNewest: arguments.contains("--throw"),
-                                         searching: arguments.firstIndex(of: "--search").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil })
+                                         searching: arguments.firstIndex(of: "--search").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil },
+                                         olderBy: arguments.firstIndex(of: "--older").flatMap { arguments.indices.contains($0 + 1) ? Int(arguments[$0 + 1]) : nil } ?? 0)
         }
         if let flag = arguments.firstIndex(of: "--history-add"), arguments.indices.contains(flag + 1) {
             coordinator.addToHistory(imageAt: URL(fileURLWithPath: arguments[flag + 1]))

@@ -7,6 +7,11 @@ public enum HistoryGrouping {
         public let title: String
         /// Oldest first, so the newest hangs at the right end of the line.
         public let entries: [HistoryEntry]
+
+        public init(title: String, entries: [HistoryEntry]) {
+            self.title = title
+            self.entries = entries
+        }
     }
 
     /// The `limit` most recent days that have captures, newest day first.

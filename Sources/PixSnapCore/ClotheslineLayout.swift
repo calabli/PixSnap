@@ -33,25 +33,14 @@ public enum ClotheslineLayout {
     public static func photoSizes(pointSizes: [CGSize], ropeLength: CGFloat, maxHeight: CGFloat, padding: CGFloat = 0) -> [CGSize] {
         guard !pointSizes.isEmpty else { return [] }
         let low = min(minimumRowHeight, maxHeight)
-        // Panoramas don't take over the whole rope.
-        let maxWidth = max(ropeLength * 0.45, minimumPhotoSide)
-
-        func size(_ source: CGSize, at height: CGFloat) -> CGSize {
-            guard source.width > 0, source.height > 0 else { return CGSize(width: height, height: height) }
-            let aspect = source.width / source.height
-            var picture = CGSize(width: min(height, source.height) * aspect, height: min(height, source.height))
-            if picture.width > maxWidth { picture = CGSize(width: maxWidth, height: maxWidth / aspect) }
-            return CGSize(width: max(minimumPhotoSide, picture.width.rounded()), height: max(minimumPhotoSide, picture.height.rounded()))
-        }
+        let maxWidth = panoramaWidth(ropeLength: ropeLength)
+        func size(_ source: CGSize, at height: CGFloat) -> CGSize { photoSize(source, at: height, maxWidth: maxWidth) }
         func fits(_ sources: ArraySlice<CGSize>, at height: CGFloat) -> Bool {
-            let used = sources.reduce(minimumGap) { $0 + size($1, at: height).width + padding + minimumGap }
-            return used <= ropeLength
+            Self.fits(sources, at: height, ropeLength: ropeLength, padding: padding)
         }
 
         // The newest photos that fit at the smallest height; always at least one.
-        var count = pointSizes.count
-        while count > 1, !fits(pointSizes.suffix(count), at: low) { count -= 1 }
-        let shown = pointSizes.suffix(count)
+        let shown = pointSizes.suffix(fittingCount(pointSizes: pointSizes, ropeLength: ropeLength, height: low, padding: padding))
 
         // The largest height that still fits, found by halving.
         var fitting = low, tooBig = maxHeight + 1
@@ -64,6 +53,62 @@ public enum ClotheslineLayout {
             }
         }
         return shown.map { size($0, at: fitting) }
+    }
+
+    /// How many of the newest photos (`pointSizes`, oldest first) fit on one rope at `height`;
+    /// always at least one.
+    public static func fittingCount(pointSizes: [CGSize], ropeLength: CGFloat, height: CGFloat, padding: CGFloat = 0) -> Int {
+        var count = pointSizes.count
+        while count > 1, !fits(pointSizes.suffix(count), at: height, ropeLength: ropeLength, padding: padding) { count -= 1 }
+        return count
+    }
+
+    /// One rope's worth of captures: a whole day, or part of a day too full for one rope.
+    public struct Rope: Equatable, Sendable {
+        public let title: String
+        /// Oldest first.
+        public let entries: [HistoryEntry]
+        /// The older part of a day that started on the rope above.
+        public let continued: Bool
+    }
+
+    /// `days` (newest first) laid out one rope each, except that a day whose photos don't all fit
+    /// at `height` carries on, older photos first dropping to the next rope, and the next.
+    public static func ropes(_ days: [HistoryGrouping.Day], ropeLength: CGFloat, height: CGFloat, padding: CGFloat = 0) -> [Rope] {
+        var ropes: [Rope] = []
+        for day in days {
+            var remaining = day.entries[...]
+            var continued = false
+            while !remaining.isEmpty {
+                let count = fittingCount(pointSizes: remaining.map(pointSize), ropeLength: ropeLength, height: height, padding: padding)
+                ropes.append(Rope(title: day.title, entries: Array(remaining.suffix(count)), continued: continued))
+                remaining = remaining.dropLast(count)
+                continued = true
+            }
+        }
+        return ropes
+    }
+
+    /// A capture's size in points.
+    public static func pointSize(_ entry: HistoryEntry) -> CGSize {
+        CGSize(width: CGFloat(entry.pixelWidth) / CGFloat(max(entry.scale, 1)), height: CGFloat(entry.pixelHeight) / CGFloat(max(entry.scale, 1)))
+    }
+
+    /// Panoramas don't take over the whole rope.
+    private static func panoramaWidth(ropeLength: CGFloat) -> CGFloat { max(ropeLength * 0.45, minimumPhotoSide) }
+
+    private static func photoSize(_ source: CGSize, at height: CGFloat, maxWidth: CGFloat) -> CGSize {
+        guard source.width > 0, source.height > 0 else { return CGSize(width: height, height: height) }
+        let aspect = source.width / source.height
+        var picture = CGSize(width: min(height, source.height) * aspect, height: min(height, source.height))
+        if picture.width > maxWidth { picture = CGSize(width: maxWidth, height: maxWidth / aspect) }
+        return CGSize(width: max(minimumPhotoSide, picture.width.rounded()), height: max(minimumPhotoSide, picture.height.rounded()))
+    }
+
+    private static func fits(_ sources: ArraySlice<CGSize>, at height: CGFloat, ropeLength: CGFloat, padding: CGFloat) -> Bool {
+        let maxWidth = panoramaWidth(ropeLength: ropeLength)
+        let used = sources.reduce(minimumGap) { $0 + photoSize($1, at: height, maxWidth: maxWidth).width + padding + minimumGap }
+        return used <= ropeLength
     }
 
     /// The center of each photo along the rope, measured from its start, with equal space between
