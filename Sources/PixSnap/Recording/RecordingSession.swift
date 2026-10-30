@@ -2,8 +2,9 @@ import AppKit
 import PixSnapCore
 
 /// A screen recording in progress: the region is outlined in red with the rest of the screen dimmed,
-/// and a small bar beside it shows the time with 停止 and 取消. The recording shortcut pressed again
-/// also stops it. Esc is left alone, since what's being recorded may need it.
+/// and a small bar beside it shows the time with 暂停, 停止 and 取消. The recording shortcut pressed
+/// again also stops it. Esc is left alone, since what's being recorded may need it. Clicks and
+/// shortcuts can be shown in the recording (Settings › 录屏).
 @MainActor
 final class RecordingSession {
     /// The finished file and its length, or nil if it was cancelled or nothing was recorded.
@@ -13,8 +14,12 @@ final class RecordingSession {
     private let screen: NSScreen
     private let outline: RegionFrameWindow
     private let controls: RecordingControlsPanel
+    private let inputs: InputOverlayWindow?
     private var recorder: ScreenRecorder?
     private var started = Date()
+    /// Time spent paused, and when the current pause began.
+    private var pausedFor: TimeInterval = 0
+    private var pausedAt: Date?
     private var timer: Timer?
     private var isEnding = false
 
@@ -23,7 +28,11 @@ final class RecordingSession {
         self.screen = screen
         outline = RegionFrameWindow(region: region, screen: screen, color: .systemRed)
         controls = RecordingControlsPanel()
+        let settings = AppSettings.shared
+        inputs = settings.highlightsClicks || settings.showsKeystrokes
+            ? InputOverlayWindow(region: region, clicks: settings.highlightsClicks, keys: settings.showsKeystrokes) : nil
         controls.onStop = { [weak self] in self?.stop() }
+        controls.onPause = { [weak self] in self?.togglePause() }
         controls.onCancel = { [weak self] in self?.cancel() }
     }
 
@@ -35,12 +44,18 @@ final class RecordingSession {
             outline.orderFrontRegardless()
             controls.place(near: region, on: screen)
             controls.orderFrontRegardless()
+            // Recorded, unlike the frame and controls: the clicks and keys are meant to show.
+            inputs?.orderFrontRegardless()
+            if settings.showsKeystrokes { PermissionGuide.ensureAccessibility() }
             let recorder = try await ScreenCapturer.shared.makeRecorder(for: region, on: screen, fps: settings.recordingFPS,
                                                                         showsCursor: settings.recordsCursor,
+                                                                        systemAudio: settings.recordsSystemAudio,
+                                                                        microphone: settings.recordsMicrophone,
                                                                         hiding: [outline.windowNumber, controls.windowNumber])
             self.recorder = recorder
             try await recorder.start()
             started = Date()
+            inputs?.start()
             timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.tick() }
             }
@@ -54,7 +69,23 @@ final class RecordingSession {
     }
 
     private func tick() {
-        controls.elapsed = Date().timeIntervalSince(started)
+        let now = pausedAt ?? Date()
+        controls.elapsed = now.timeIntervalSince(started) - pausedFor
+    }
+
+    /// Pauses, or carries on after a pause; the paused stretch is left out of the video.
+    func togglePause() {
+        guard !isEnding, let recorder else { return }
+        if let pausedAt {
+            pausedFor += Date().timeIntervalSince(pausedAt)
+            self.pausedAt = nil
+            recorder.resume()
+        } else {
+            pausedAt = Date()
+            recorder.pause()
+        }
+        controls.isPaused = pausedAt != nil
+        tick()
     }
 
     func stop() {
@@ -83,14 +114,27 @@ final class RecordingSession {
         timer = nil
         outline.orderOut(nil)
         controls.orderOut(nil)
+        inputs?.stop()
+        inputs?.orderOut(nil)
     }
 }
 
-/// The bar beside the region while recording: a pulsing red dot, the time, 停止 and 取消.
+/// The bar beside the region while recording: a pulsing red dot, the time, 暂停, 停止 and 取消.
 @MainActor
 private final class RecordingControlsPanel: NSPanel {
     var onStop: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onPause: (() -> Void)?
+
+    var isPaused = false {
+        didSet {
+            pause.image = NSImage(systemSymbolName: isPaused ? "record.circle" : "pause.fill", accessibilityDescription: nil)
+            pause.toolTip = isPaused ? "继续录制" : "暂停：暂停的这段不会录进去"
+            dot.layer?.backgroundColor = (isPaused ? NSColor.systemGray : NSColor.systemRed).cgColor
+            dot.layer?.opacity = 1
+            if isPaused { dot.layer?.removeAnimation(forKey: "pulse") } else { dot.layer?.add(Self.pulse, forKey: "pulse") }
+        }
+    }
 
     var elapsed: Double = 0 {
         didSet {
@@ -103,6 +147,7 @@ private final class RecordingControlsPanel: NSPanel {
         didSet {
             stop.isEnabled = !isFinishing
             cancel.isEnabled = !isFinishing
+            pause.isEnabled = !isFinishing
             if isFinishing { time.stringValue = "正在保存…" }
         }
     }
@@ -111,7 +156,18 @@ private final class RecordingControlsPanel: NSPanel {
     private let time = NSTextField(labelWithString: "00:00")
     private let stop = NSButton(title: "停止", target: nil, action: nil)
     private let cancel = NSButton(title: "取消", target: nil, action: nil)
-    private static let size = CGSize(width: 250, height: 40)
+    private let pause = NSButton(image: NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "暂停")!, target: nil, action: nil)
+    private static let size = CGSize(width: 290, height: 40)
+
+    private static var pulse: CABasicAnimation {
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1
+        pulse.toValue = 0.3
+        pulse.duration = 0.8
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        return pulse
+    }
 
     init() {
         super.init(contentRect: CGRect(origin: .zero, size: Self.size), styleMask: [.borderless, .nonactivatingPanel],
@@ -135,13 +191,7 @@ private final class RecordingControlsPanel: NSPanel {
         dot.layer?.backgroundColor = NSColor.systemRed.cgColor
         dot.layer?.cornerRadius = 5
         dot.translatesAutoresizingMaskIntoConstraints = false
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1
-        pulse.toValue = 0.3
-        pulse.duration = 0.8
-        pulse.autoreverses = true
-        pulse.repeatCount = .infinity
-        dot.layer?.add(pulse, forKey: "pulse")
+        dot.layer?.add(Self.pulse, forKey: "pulse")
 
         time.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
         stop.bezelStyle = .rounded
@@ -154,8 +204,12 @@ private final class RecordingControlsPanel: NSPanel {
         cancel.bezelStyle = .rounded
         cancel.target = self
         cancel.action = #selector(cancelClicked)
+        pause.bezelStyle = .rounded
+        pause.target = self
+        pause.action = #selector(pauseClicked)
+        pause.toolTip = "暂停：暂停的这段不会录进去"
 
-        let stack = NSStackView(views: [dot, time, NSView(), cancel, stop])
+        let stack = NSStackView(views: [dot, time, NSView(), pause, cancel, stop])
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 8)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -183,4 +237,122 @@ private final class RecordingControlsPanel: NSPanel {
 
     @objc private func stopClicked() { onStop?() }
     @objc private func cancelClicked() { onCancel?() }
+    @objc private func pauseClicked() { onPause?() }
+}
+
+/// Over the region while recording, and recorded with it: a ring where each click lands, and the
+/// shortcuts pressed (see `Keystroke`) in a pill at the bottom. Clicks pass through it.
+@MainActor
+private final class InputOverlayWindow: NSPanel {
+    private let region: CGRect
+    private let showsClicks: Bool
+    private let showsKeys: Bool
+    private var monitors: [Any] = []
+    private let keyPill = NSView()
+    private let keyLabel = NSTextField(labelWithString: "")
+    private var keyWork: DispatchWorkItem?
+
+    init(region: CGRect, clicks: Bool, keys: Bool) {
+        self.region = region
+        showsClicks = clicks
+        showsKeys = keys
+        super.init(contentRect: region, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        let content = NSView(frame: CGRect(origin: .zero, size: region.size))
+        content.wantsLayer = true
+        keyLabel.font = .systemFont(ofSize: max(16, min(28, region.height / 18)), weight: .semibold)
+        keyLabel.textColor = .white
+        keyPill.addSubview(keyLabel)
+        keyPill.wantsLayer = true
+        keyPill.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
+        keyPill.alphaValue = 0
+        content.addSubview(keyPill)
+        contentView = content
+    }
+
+    func start() {
+        if showsClicks {
+            let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            monitors.append(NSEvent.addGlobalMonitorForEvents(matching: clicks) { _ in
+                MainActor.assumeIsolated { self.ring(at: NSEvent.mouseLocation) }
+            } as Any)
+            monitors.append(NSEvent.addLocalMonitorForEvents(matching: clicks) { [weak self] event in
+                self?.ring(at: NSEvent.mouseLocation)
+                return event
+            } as Any)
+        }
+        if showsKeys {
+            monitors.append(NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+                MainActor.assumeIsolated { self.show(event) }
+            } as Any)
+            monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                self?.show(event)
+                return event
+            } as Any)
+        }
+    }
+
+    func stop() {
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors = []
+    }
+
+    /// A ring that grows and fades where the click landed (screen coordinates).
+    private func ring(at point: CGPoint) {
+        guard region.contains(point), let layer = contentView?.layer else { return }
+        let size: CGFloat = 44
+        let ring = CAShapeLayer()
+        ring.path = CGPath(ellipseIn: CGRect(x: -size / 2, y: -size / 2, width: size, height: size), transform: nil)
+        ring.fillColor = NSColor.systemYellow.withAlphaComponent(0.25).cgColor
+        ring.strokeColor = NSColor.systemYellow.cgColor
+        ring.lineWidth = 3
+        ring.position = CGPoint(x: point.x - region.minX, y: point.y - region.minY)
+        layer.addSublayer(ring)
+        let grow = CABasicAnimation(keyPath: "transform.scale")
+        grow.fromValue = 0.3
+        grow.toValue = 1.2
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        let group = CAAnimationGroup()
+        group.animations = [grow, fade]
+        group.duration = 0.5
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { ring.removeFromSuperlayer() }
+        ring.opacity = 0
+        ring.add(group, forKey: "click")
+        CATransaction.commit()
+    }
+
+    private func show(_ event: NSEvent) {
+        let flags = event.modifierFlags
+        var modifiers: ShortcutModifiers = []
+        if flags.contains(.control) { modifiers.insert(.control) }
+        if flags.contains(.option) { modifiers.insert(.option) }
+        if flags.contains(.shift) { modifiers.insert(.shift) }
+        if flags.contains(.command) { modifiers.insert(.command) }
+        guard let label = Keystroke.label(keyCode: event.keyCode, modifiers: modifiers, characters: event.charactersIgnoringModifiers),
+              let content = contentView else { return }
+        keyLabel.stringValue = label
+        keyLabel.sizeToFit()
+        let size = CGSize(width: keyLabel.frame.width + 28, height: keyLabel.frame.height + 12)
+        keyLabel.setFrameOrigin(CGPoint(x: 14, y: 6))
+        keyPill.frame = CGRect(x: ((content.bounds.width - size.width) / 2).rounded(), y: 24, width: size.width, height: size.height)
+        keyPill.layer?.cornerRadius = size.height / 2
+        keyPill.alphaValue = 1
+        keyWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            NSAnimationContext.runAnimationGroup { $0.duration = 0.3; self?.keyPill.animator().alphaValue = 0 }
+        }
+        keyWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
 }

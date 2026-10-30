@@ -168,6 +168,11 @@ public final class HistoryDatabase {
         return total
     }
 
+    /// A recording's new length, after it's been trimmed.
+    public func setRecordingDuration(_ duration: Double, id: UUID) throws {
+        try run("UPDATE captures SET recording_duration = ? WHERE id = ?", [.real(duration), .text(id.uuidString)])
+    }
+
     public func setFavorite(_ isFavorite: Bool, id: UUID) throws {
         try run("UPDATE captures SET is_favorite = ? WHERE id = ?", [.integer(isFavorite ? 1 : 0), .text(id.uuidString)])
     }

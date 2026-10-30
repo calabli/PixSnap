@@ -197,6 +197,15 @@ final class HistoryLibrary {
         return text
     }
 
+    /// A trimmed recording takes the place of the one in history: its file, length and thumbnails.
+    func replaceRecording(_ id: UUID, with trimmed: URL, duration: Double) async throws {
+        let stored = HistoryFiles.videoURL(id: id, in: originals)
+        _ = try FileManager.default.replaceItemAt(stored, withItemAt: trimmed)
+        try database?.setRecordingDuration(duration, id: id)
+        try? await HistoryFiles.writeRecordingThumbnails(stored, duration: duration, id: id, thumbnails: thumbnails)
+        revision += 1
+    }
+
     /// A recording's MP4.
     func videoURL(for entry: HistoryEntry) -> URL? {
         let url = HistoryFiles.videoURL(id: entry.id, in: originals)

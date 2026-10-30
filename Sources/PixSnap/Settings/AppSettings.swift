@@ -46,6 +46,26 @@ final class AppSettings {
         didSet { defaults.set(recordsCursor, forKey: Keys.recordsCursor) }
     }
 
+    /// Whether recordings take in the sound the Mac plays.
+    var recordsSystemAudio: Bool {
+        didSet { defaults.set(recordsSystemAudio, forKey: Keys.recordsSystemAudio) }
+    }
+
+    /// Whether recordings take in the microphone (macOS 15 and later).
+    var recordsMicrophone: Bool {
+        didSet { defaults.set(recordsMicrophone, forKey: Keys.recordsMicrophone) }
+    }
+
+    /// Whether clicks show as a ring in recordings.
+    var highlightsClicks: Bool {
+        didSet { defaults.set(highlightsClicks, forKey: Keys.highlightsClicks) }
+    }
+
+    /// Whether shortcuts pressed while recording show at the bottom of the region.
+    var showsKeystrokes: Bool {
+        didSet { defaults.set(showsKeystrokes, forKey: Keys.showsKeystrokes) }
+    }
+
     /// Shadow and background for window captures.
     var windowCaptureStyle: WindowCaptureStyle {
         didSet { if let data = try? JSONEncoder().encode(windowCaptureStyle) { defaults.set(data, forKey: Keys.windowCaptureStyle) } }
@@ -112,6 +132,10 @@ final class AppSettings {
         static let recordingFPS = "recordingFPS"
         static let recognizesText = "recognizesText"
         static let recordsCursor = "recordsCursor"
+        static let recordsSystemAudio = "recordsSystemAudio"
+        static let recordsMicrophone = "recordsMicrophone"
+        static let highlightsClicks = "highlightsClicks"
+        static let showsKeystrokes = "showsKeystrokes"
         static let copiesAfterCapture = "copiesAfterCapture"
         static let saveFolderPath = "saveFolderPath"
         static let asksWhereToSave = "asksWhereToSave"
@@ -141,6 +165,10 @@ final class AppSettings {
         let fps = defaults.integer(forKey: Keys.recordingFPS)
         recordingFPS = Self.recordingFPSChoices.contains(fps) ? fps : 30
         recordsCursor = defaults.object(forKey: Keys.recordsCursor) as? Bool ?? true
+        recordsSystemAudio = defaults.bool(forKey: Keys.recordsSystemAudio)
+        recordsMicrophone = defaults.bool(forKey: Keys.recordsMicrophone)
+        highlightsClicks = defaults.bool(forKey: Keys.highlightsClicks)
+        showsKeystrokes = defaults.bool(forKey: Keys.showsKeystrokes)
         windowCaptureStyle = defaults.data(forKey: Keys.windowCaptureStyle)
             .flatMap { try? JSONDecoder().decode(WindowCaptureStyle.self, from: $0) } ?? .default
         copiesAfterCapture = defaults.bool(forKey: Keys.copiesAfterCapture)

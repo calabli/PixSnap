@@ -72,6 +72,10 @@ struct SettingsView: View {
         return (parts + [size]).joined(separator: " · ")
     }
 
+    private var microphoneAvailable: Bool {
+        if #available(macOS 15, *) { true } else { false }
+    }
+
     var body: some View {
         Form {
             Section("快捷键") {
@@ -169,8 +173,18 @@ struct SettingsView: View {
                     ForEach(AppSettings.recordingFPSChoices, id: \.self) { Text("\($0) 帧/秒").tag($0) }
                 }
                 Toggle("录制鼠标指针", isOn: $settings.recordsCursor)
+                Toggle("高亮鼠标点击", isOn: $settings.highlightsClicks)
+                    .help("点击的地方出现一圈涟漪，录进视频里")
+                Toggle("显示按键", isOn: $settings.showsKeystrokes)
+                    .help("按下的快捷键（如 ⌘C）和回车、方向键等显示在区域底部；普通打字不显示。需要在“辅助功能”里允许 PixSnap")
+                    .onChange(of: settings.showsKeystrokes) { if settings.showsKeystrokes { PermissionGuide.ensureAccessibility() } }
+                Toggle("录制系统声音", isOn: $settings.recordsSystemAudio)
+                    .help("Mac 播放的声音（视频、提示音等），不含 PixSnap 自己的声音")
+                Toggle("录制麦克风", isOn: $settings.recordsMicrophone)
+                    .help(microphoneAvailable ? "第一次录制时 macOS 会询问是否允许 PixSnap 使用麦克风" : "需要 macOS 15 或更新版本")
+                    .disabled(!microphoneAvailable)
                 HStack {
-                    Text("先框选区域或单击一个窗口，然后开始录制；点“停止”或再按一次录屏快捷键结束。录完可以存成 MP4 或 GIF。")
+                    Text("先框选区域或单击一个窗口，然后开始录制；录制中可以暂停，点“停止”或再按一次录屏快捷键结束。录完可以剪掉头尾，存成 MP4 或 GIF。")
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer()
                 }

@@ -118,7 +118,8 @@ final class ScreenCapturer {
     /// A recorder for `rect` (global AppKit coordinates, inside `screen`), leaving out only the
     /// windows numbered `windowNumbers` (the recording's own frame and controls); PixSnap's other
     /// windows are recorded like any app's.
-    func makeRecorder(for rect: CGRect, on screen: NSScreen, fps: Int, showsCursor: Bool, hiding windowNumbers: [Int]) async throws -> ScreenRecorder {
+    func makeRecorder(for rect: CGRect, on screen: NSScreen, fps: Int, showsCursor: Bool, systemAudio: Bool = false, microphone: Bool = false,
+                      hiding windowNumbers: [Int]) async throws -> ScreenRecorder {
         // Fresh, so the windows to hide (just put on screen) are in it.
         var content = try await freshContent()
         let wanted = Set(windowNumbers.map(CGWindowID.init))
@@ -134,7 +135,7 @@ final class ScreenCapturer {
         let sourceRect = CGRect(x: rect.minX - screen.frame.minX, y: screen.frame.maxY - rect.maxY, width: rect.width, height: rect.height)
         return try ScreenRecorder(filter: filter, sourceRect: sourceRect,
                                   pixelSize: recordingPixelSize(points: rect.size, scale: screen.backingScaleFactor),
-                                  fps: fps, showsCursor: showsCursor)
+                                  fps: fps, showsCursor: showsCursor, recordsSystemAudio: systemAudio, recordsMicrophone: microphone)
     }
 
     /// Captures one window by itself: nothing in front of or behind it, on transparency. The capture

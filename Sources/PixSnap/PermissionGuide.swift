@@ -11,6 +11,14 @@ enum PermissionGuide {
         return false
     }
 
+    /// Returns true when PixSnap may see keys pressed in other apps (for showing shortcuts in
+    /// recordings). Otherwise asks macOS to show its "辅助功能" prompt.
+    @discardableResult
+    static func ensureAccessibility() -> Bool {
+        let prompt = "AXTrustedCheckOptionPrompt" as CFString
+        return AXIsProcessTrustedWithOptions([prompt: true] as CFDictionary)
+    }
+
     static func showScreenCaptureAlert() {
         NSApp.activate()
         let alert = NSAlert()

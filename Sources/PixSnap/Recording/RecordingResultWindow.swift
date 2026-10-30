@@ -1,26 +1,29 @@
 import AVFoundation
+import AVKit
 import AppKit
 import PixSnapCore
 import UniformTypeIdentifiers
 
 /// A recording, floating where it was made (or opened from history): it plays on a loop (muted),
-/// with its length, and a bar to save it as MP4 or GIF, drag it into another app, delete it from
-/// history for good (two clicks), or close it.
+/// with its length, and a bar to trim its start and end, save it as MP4 or GIF, drag it into
+/// another app, delete it from history for good (two clicks), or close it.
 /// Recordings are kept in history like screenshots; with history off, an unsaved one is cleaned
 /// out of Caches after a day.
 @MainActor
 final class RecordingResultWindow: NSPanel {
     var onClosed: ((RecordingResultWindow) -> Void)?
 
-    private let video: URL
+    private var video: URL
     /// Its entry in history, if it has one; deleting needs it.
     private let historyID: UUID?
     private var deleteButton: NSButton?
     private var confirmingDelete = false
-    private let duration: Double
+    private var duration: Double
+    private let pixelSize: CGSize
     private let recordedAt = Date()
-    private let player: AVQueuePlayer
-    private let looper: AVPlayerLooper
+    private var player: AVQueuePlayer
+    private var looper: AVPlayerLooper
+    private let playerView = AVPlayerView()
     private let status = NSTextField(labelWithString: "")
     private var buttons: [NSButton] = []
 
@@ -31,15 +34,13 @@ final class RecordingResultWindow: NSPanel {
         self.video = video
         self.historyID = historyID
         self.duration = duration
-        let item = AVPlayerItem(url: video)
-        player = AVQueuePlayer()
-        looper = AVPlayerLooper(player: player, templateItem: item)
-        player.isMuted = true
+        self.pixelSize = pixelSize
+        (player, looper) = Self.loop(video)
 
         // The video, scaled to fit, with the bar under it; placed over the recorded region.
         let fit = min(1, Self.largest.width / max(region.width, 1), Self.largest.height / max(region.height, 1))
         let videoSize = CGSize(width: max(240, (region.width * fit).rounded()), height: max(120, (region.height * fit).rounded()))
-        let size = CGSize(width: max(videoSize.width, historyID == nil ? 470 : 540), height: videoSize.height + Self.barHeight + 6)
+        let size = CGSize(width: max(videoSize.width, historyID == nil ? 540 : 610), height: videoSize.height + Self.barHeight + 6)
         let visible = screen.visibleFrame
         let origin = CGPoint(x: min(max(region.midX - size.width / 2, visible.minX + 10), visible.maxX - size.width - 10),
                              y: min(max(region.midY - size.height / 2, visible.minY + 10), visible.maxY - size.height - 10))
@@ -54,26 +55,25 @@ final class RecordingResultWindow: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         let content = NSView(frame: CGRect(origin: .zero, size: size))
-        let playerView = NSView(frame: CGRect(x: (size.width - videoSize.width) / 2, y: Self.barHeight + 6,
-                                              width: videoSize.width, height: videoSize.height))
+        playerView.frame = CGRect(x: (size.width - videoSize.width) / 2, y: Self.barHeight + 6, width: videoSize.width, height: videoSize.height)
+        playerView.autoresizingMask = [.width, .height]
+        playerView.controlsStyle = .none
+        playerView.videoGravity = .resizeAspect
         playerView.wantsLayer = true
         playerView.layer?.backgroundColor = NSColor.black.cgColor
         playerView.layer?.cornerRadius = 6
         playerView.layer?.masksToBounds = true
-        let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.frame = playerView.bounds
-        playerLayer.videoGravity = .resizeAspect
-        playerView.layer?.addSublayer(playerLayer)
+        playerView.player = player
         content.addSubview(playerView)
 
         let bar = NSVisualEffectView(frame: CGRect(x: 0, y: 0, width: size.width, height: Self.barHeight))
+        bar.autoresizingMask = [.width]
         bar.material = .popover
         bar.state = .active
         bar.wantsLayer = true
         bar.layer?.cornerRadius = 8
         bar.layer?.masksToBounds = true
-        let seconds = Int(duration.rounded())
-        status.stringValue = String(format: "录屏 %d:%02d · %d×%d", seconds / 60, seconds % 60, Int(pixelSize.width), Int(pixelSize.height))
+        showLength()
         status.font = .systemFont(ofSize: 11)
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
@@ -81,6 +81,7 @@ final class RecordingResultWindow: NSPanel {
         let drag = FileDragHandle(file: { [weak self] in self?.video })
         var views: [NSView] = [
             status,
+            button("剪辑", symbol: "scissors", tip: "剪掉开头和结尾", action: #selector(trimClicked)),
             button("存为视频", symbol: "film", tip: "保存为 MP4", action: #selector(saveVideo)),
             button("存为 GIF", symbol: "photo.on.rectangle", tip: "转成 GIF 保存（15 帧/秒，最宽 800 像素）", action: #selector(saveGIF)),
             drag,
@@ -108,7 +109,122 @@ final class RecordingResultWindow: NSPanel {
     }
 
     override var canBecomeKey: Bool { true }
-    override func cancelOperation(_ sender: Any?) { close() }
+    override func cancelOperation(_ sender: Any?) {
+        if trimming { return }
+        close()
+    }
+
+    /// Plays `video` round and round, muted.
+    private static func loop(_ video: URL) -> (AVQueuePlayer, AVPlayerLooper) {
+        let player = AVQueuePlayer()
+        let looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: video))
+        player.isMuted = true
+        return (player, looper)
+    }
+
+    private func showLength() {
+        let seconds = Int(duration.rounded())
+        status.stringValue = String(format: "录屏 %d:%02d · %d×%d", seconds / 60, seconds % 60, Int(pixelSize.width), Int(pixelSize.height))
+    }
+
+    // MARK: Trimming
+
+    private var trimming = false
+    /// The smallest the window gets while trimming, so the trim bar has room.
+    private static let trimmingSize = CGSize(width: 620, height: 340)
+
+    /// The system's trim bar over the video: drag its yellow ends, then 修剪. The cut is
+    /// re-encoded so it starts exactly where chosen, and replaces the recording (in history too).
+    @objc private func trimClicked() {
+        guard !trimming else { return }
+        let player = AVPlayer(playerItem: AVPlayerItem(url: video))
+        player.isMuted = true
+        playerView.player = player
+        self.player.pause()
+        guard playerView.canBeginTrimming else {
+            playerView.player = self.player
+            self.player.play()
+            return
+        }
+        trimming = true
+        buttons.forEach { $0.isEnabled = false }
+        status.stringValue = "拖动两端的黄色把手，然后点“修剪”"
+        let before = frame
+        let grown = CGSize(width: max(before.width, Self.trimmingSize.width), height: max(before.height, Self.trimmingSize.height))
+        setFrame(CGRect(x: before.midX - grown.width / 2, y: before.maxY - grown.height, width: grown.width, height: grown.height), display: true, animate: true)
+        playerView.controlsStyle = .inline
+        playerView.beginTrimming { [weak self] result in
+            MainActor.assumeIsolated { self?.trimmed(result, player: player, restoring: before) }
+        }
+    }
+
+    private func trimmed(_ result: AVPlayerViewTrimResult, player: AVPlayer, restoring before: CGRect) {
+        let item = player.currentItem
+        let start = item?.reversePlaybackEndTime ?? .invalid
+        let end = item?.forwardPlaybackEndTime ?? .invalid
+        playerView.controlsStyle = .none
+        setFrame(before, display: true, animate: true)
+        trimming = false
+        guard result == .okButton else {
+            finishTrimming()
+            return
+        }
+        let range = CMTimeRange(start: start.isValid ? start : .zero,
+                                end: end.isValid ? end : CMTime(seconds: duration, preferredTimescale: 600))
+        cut(to: range)
+    }
+
+    /// Back to looping whatever `video` is now, with the buttons working again.
+    private func finishTrimming() {
+        (player, looper) = Self.loop(video)
+        playerView.player = player
+        player.play()
+        buttons.forEach { $0.isEnabled = true }
+        showLength()
+    }
+
+    private func cut(to range: CMTimeRange) {
+        status.stringValue = "正在剪辑…"
+        let historyID = historyID
+        let source = video
+        Task {
+            do {
+                let trimmed = try await Self.export(source, range: range)
+                let length = range.duration.seconds
+                if let historyID {
+                    try await HistoryLibrary.shared.replaceRecording(historyID, with: trimmed, duration: length)
+                } else {
+                    _ = try FileManager.default.replaceItemAt(source, withItemAt: trimmed)
+                }
+                duration = length
+                finishTrimming()
+                let seconds = Int(length.rounded())
+                status.stringValue = String(format: "已剪辑，现在 %d:%02d", seconds / 60, seconds % 60)
+            } catch {
+                NSLog("PixSnap could not trim a recording: \(error)")
+                finishTrimming()
+                status.stringValue = "剪辑失败"
+            }
+        }
+    }
+
+    private static func export(_ video: URL, range: CMTimeRange) async throws -> URL {
+        let asset = AVURLAsset(url: video)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            throw CocoaError(.featureUnsupported)
+        }
+        let output = ScreenRecorder.folder.appendingPathComponent("\(UUID().uuidString).mp4")
+        session.timeRange = range
+        if #available(macOS 15, *) {
+            try await session.export(to: output, as: .mp4)
+        } else {
+            session.outputURL = output
+            session.outputFileType = .mp4
+            await session.export()
+            guard session.status == .completed else { throw session.error ?? CocoaError(.fileWriteUnknown) }
+        }
+        return output
+    }
 
     override func close() {
         player.pause()
