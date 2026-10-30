@@ -135,7 +135,7 @@ final class CaptureCoordinator {
     }
 
     /// Development: shows the selection overlay over an image file instead of the live screen.
-    func showOverlay(forImageAt url: URL) {
+    func showOverlay(forImageAt url: URL, selecting selection: CGRect? = nil) {
         guard !isCapturing, let capture = Self.loadCapture(at: url),
               let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) else { return }
         isCapturing = true
@@ -148,6 +148,7 @@ final class CaptureCoordinator {
             isFirst: true,
             timing: CaptureTiming()
         )
+        if let selection { overlays.last?.selectionView.select(selection) }
     }
 
     /// Loads an image file, using its DPI to recover the Retina scale.
@@ -410,6 +411,9 @@ final class CaptureCoordinator {
             }
         }
         window.selectionView.onCancel = { [weak self] in self?.endSession() }
+        window.selectionView.onBeginSelection = { [weak self, weak window] in
+            self?.overlays.filter { $0 !== window }.forEach { $0.selectionView.clearSelection() }
+        }
         window.orderFrontRegardless()
         overlays.append(window)
 

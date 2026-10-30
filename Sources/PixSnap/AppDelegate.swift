@@ -94,7 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         if let flag = arguments.firstIndex(of: "--overlay"), arguments.indices.contains(flag + 1) {
-            coordinator.showOverlay(forImageAt: URL(fileURLWithPath: arguments[flag + 1]))
+            let selection = arguments.firstIndex(of: "--selection").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+                .map { $0.split(separator: ",").compactMap { Double($0) } }
+                .flatMap { $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil }
+            coordinator.showOverlay(forImageAt: URL(fileURLWithPath: arguments[flag + 1]), selecting: selection)
         }
         if let flag = arguments.firstIndex(of: "--benchmark-capture") {
             let runs = arguments.indices.contains(flag + 1) ? Int(arguments[flag + 1]) ?? 10 : 10
