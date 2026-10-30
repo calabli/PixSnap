@@ -56,4 +56,23 @@ final class AnnotationShapeTests: XCTestCase {
         let diagonal = Annotation.snapped(from: .zero, to: CGPoint(x: 100, y: 90))
         XCTAssertEqual(diagonal.x, diagonal.y, accuracy: 0.001)
     }
+
+    func testRulerReadsScreenshotPixels() {
+        XCTAssertEqual(Annotation.rulerLabel(from: CGPoint(x: 10, y: 20), to: CGPoint(x: 110, y: 20), scale: 2), "宽 200 px")
+        XCTAssertEqual(Annotation.rulerLabel(from: CGPoint(x: 10, y: 20), to: CGPoint(x: 10, y: 80), scale: 2), "高 120 px")
+        XCTAssertEqual(Annotation.rulerLabel(from: .zero, to: CGPoint(x: 30, y: 40), scale: 1), "50 px")
+    }
+
+    func testRulerHitsAndMovesLikeALine() {
+        let ruler = Annotation(shape: .ruler(from: CGPoint(x: 0, y: 0), to: CGPoint(x: 100, y: 0)), color: .red, lineWidth: 2)
+        XCTAssertTrue(ruler.hitTest(CGPoint(x: 50, y: 3), tolerance: 4))
+        XCTAssertFalse(ruler.hitTest(CGPoint(x: 50, y: 20), tolerance: 4))
+        XCTAssertEqual(ruler.translated(dx: 5, dy: 5).shape, .ruler(from: CGPoint(x: 5, y: 5), to: CGPoint(x: 105, y: 5)))
+    }
+
+    func testStylesSurviveMoving() {
+        let arrow = Annotation(shape: .arrow(from: .zero, to: CGPoint(x: 10, y: 10)), color: .blue, lineWidth: 4, arrowStyle: .double)
+        XCTAssertEqual(arrow.translated(dx: 1, dy: 1).arrowStyle, .double)
+    }
 }
+

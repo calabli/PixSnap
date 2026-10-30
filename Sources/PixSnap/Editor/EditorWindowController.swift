@@ -18,11 +18,15 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
     private let toolControl: NSSegmentedControl
     private let widthControl: NSSegmentedControl
     private var swatches: [ColorSwatch] = []
+    /// The last color picked from the screen; hidden until there is one.
+    private let customSwatch = ColorSwatch(color: .black)
+    /// Arrow style for the arrow tool, font for the text tool; hidden for the rest.
+    private let stylePopup = NSPopUpButton()
     private var undoButton: NSButton!
     private var redoButton: NSButton!
 
     private static let toolbarHeight: CGFloat = 52
-    private static let minimumWidth: CGFloat = 760
+    private static let minimumWidth: CGFloat = 1060
 
     init(capture: Capture, history: EditHistory<AnnotationDocument>?, screen: NSScreen?) {
         self.capture = capture
@@ -94,9 +98,19 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
             swatch.action = #selector(colorChanged(_:))
             return swatch
         }
-        swatches.first?.isChosen = true
-        let swatchStack = NSStackView(views: swatches)
+        customSwatch.target = self
+        customSwatch.action = #selector(colorChanged(_:))
+        customSwatch.isHidden = true
+        customSwatch.toolTip = "取色器取到的颜色"
+        let picker = iconButton("eyedropper", tip: "取色器：从屏幕上任意位置取一个颜色", action: #selector(pickColor))
+        picker.bezelStyle = .recessed
+        picker.showsBorderOnlyWhileMouseInside = true
+        let swatchStack = NSStackView(views: swatches + [customSwatch, picker])
         swatchStack.spacing = 6
+
+        stylePopup.target = self
+        stylePopup.action = #selector(styleChanged)
+        stylePopup.controlSize = .regular
 
         widthControl.selectedSegment = StrokeWidth.medium.rawValue
         widthControl.target = self
@@ -126,7 +140,7 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let toolbar = NSStackView(views: [toolControl, swatchStack, widthControl, spacer, undoButton, redoButton, copyButton, saveButton, exitButton])
+        let toolbar = NSStackView(views: [toolControl, swatchStack, widthControl, stylePopup, spacer, undoButton, redoButton, copyButton, saveButton, exitButton])
         toolbar.spacing = 14
         toolbar.edgeInsets = NSEdgeInsets(top: 0, left: 14, bottom: 0, right: 14)
         toolbar.setCustomSpacing(4, after: undoButton)
@@ -170,24 +184,90 @@ final class EditorWindowController: NSObject, NSWindowDelegate {
     private func select(_ tool: EditorTool) {
         toolControl.selectedSegment = tool.rawValue
         canvas.tool = tool
+        refreshStyleControls()
     }
 
     @objc private func toolChanged() {
         guard let tool = EditorTool(rawValue: toolControl.selectedSegment) else { return }
         canvas.tool = tool
+        refreshStyleControls()
         window.makeFirstResponder(canvas)
     }
 
+    /// The swatches, width and style menu show what the current tool draws with.
+    private func refreshStyleControls() {
+        let color = canvas.color
+        let inPalette = AnnotationColor.palette.contains(color)
+        if !inPalette {
+            customSwatch.color = color
+            customSwatch.isHidden = false
+        }
+        swatches.forEach { $0.isChosen = $0.color == color }
+        customSwatch.isChosen = !inPalette
+        widthControl.selectedSegment = canvas.strokeWidth.rawValue
+
+        stylePopup.removeAllItems()
+        switch canvas.tool {
+        case .arrow:
+            stylePopup.addItems(withTitles: ArrowStyle.allCases.map(\.title))
+            stylePopup.selectItem(at: ArrowStyle.allCases.firstIndex(of: canvas.arrowStyle) ?? 0)
+            stylePopup.toolTip = "箭头样式"
+            stylePopup.isHidden = false
+        case .text:
+            for font in TextFont.allCases {
+                stylePopup.addItem(withTitle: font.title)
+                stylePopup.lastItem?.attributedTitle = NSAttributedString(string: font.title,
+                                                                          attributes: [.font: AnnotationRenderer.nsFont(font, size: 13)])
+            }
+            stylePopup.selectItem(at: TextFont.allCases.firstIndex(of: canvas.textFont) ?? 0)
+            stylePopup.toolTip = "字体"
+            stylePopup.isHidden = false
+        default:
+            stylePopup.isHidden = true
+        }
+    }
+
     @objc private func colorChanged(_ sender: ColorSwatch) {
-        swatches.forEach { $0.isChosen = $0 === sender }
-        canvas.color = sender.color
+        setColor(sender.color)
+    }
+
+    private func setColor(_ color: AnnotationColor) {
+        canvas.color = color
+        canvas.rememberStyle()
         canvas.applyStyleToSelection()
+        refreshStyleControls()
         window.makeFirstResponder(canvas)
+    }
+
+    /// The system's loupe: click anywhere on screen (the screenshot too) to take that color.
+    @objc private func pickColor() {
+        NSColorSampler().show { [weak self] picked in
+            MainActor.assumeIsolated {
+                guard let rgb = picked?.usingColorSpace(.sRGB) else { return }
+                self?.setColor(AnnotationColor(red: rgb.redComponent, green: rgb.greenComponent, blue: rgb.blueComponent))
+            }
+        }
     }
 
     @objc private func widthChanged() {
         guard let width = StrokeWidth(rawValue: widthControl.selectedSegment) else { return }
         canvas.strokeWidth = width
+        canvas.rememberStyle()
+        canvas.applyStyleToSelection()
+        window.makeFirstResponder(canvas)
+    }
+
+    @objc private func styleChanged() {
+        let index = stylePopup.indexOfSelectedItem
+        switch canvas.tool {
+        case .arrow where ArrowStyle.allCases.indices.contains(index):
+            canvas.arrowStyle = ArrowStyle.allCases[index]
+        case .text where TextFont.allCases.indices.contains(index):
+            canvas.textFont = TextFont.allCases[index]
+        default:
+            return
+        }
+        canvas.rememberStyle()
         canvas.applyStyleToSelection()
         window.makeFirstResponder(canvas)
     }
@@ -279,7 +359,7 @@ final class CanvasStage: NSView {
 /// A round color button in the toolbar.
 @MainActor
 final class ColorSwatch: NSButton {
-    let color: AnnotationColor
+    var color: AnnotationColor { didSet { needsDisplay = true } }
     var isChosen = false { didSet { needsDisplay = true } }
 
     init(color: AnnotationColor) {

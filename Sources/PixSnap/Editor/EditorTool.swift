@@ -1,7 +1,8 @@
 import Foundation
+import PixSnapCore
 
 enum EditorTool: Int, CaseIterable {
-    case select, rectangle, ellipse, arrow, line, pen, highlight, text, counter, mosaic, blur, magnifier, crop
+    case select, rectangle, ellipse, arrow, line, pen, highlight, text, counter, mosaic, blur, magnifier, ruler, crop
 
     var title: String {
         switch self {
@@ -17,6 +18,7 @@ enum EditorTool: Int, CaseIterable {
         case .mosaic: "马赛克"
         case .blur: "模糊"
         case .magnifier: "放大镜"
+        case .ruler: "量尺"
         case .crop: "裁剪"
         }
     }
@@ -35,6 +37,7 @@ enum EditorTool: Int, CaseIterable {
         case .mosaic: "checkerboard.rectangle"
         case .blur: "drop.halffull"
         case .magnifier: "magnifyingglass.circle"
+        case .ruler: "ruler"
         case .crop: "crop"
         }
     }
@@ -54,6 +57,7 @@ enum EditorTool: Int, CaseIterable {
         case .mosaic: "m"
         case .blur: "b"
         case .magnifier: "g"
+        case .ruler: "u"
         case .crop: "c"
         }
     }
@@ -84,5 +88,51 @@ enum StrokeWidth: Int, CaseIterable {
         case .medium: 22
         case .thick: 30
         }
+    }
+}
+
+/// What each tool was last drawn with, so going back to a tool brings back its color and width
+/// (red arrows and yellow highlighter, say). Arrow style and font are one each, for all arrows
+/// and all text. Kept in UserDefaults; shared by the editor and floating captures.
+@MainActor
+enum ToolStyles {
+    struct Style: Codable {
+        var color: AnnotationColor
+        var width: Int
+    }
+
+    private static let key = "toolStyles"
+    private static let arrowKey = "arrowStyle"
+    private static let fontKey = "textFont"
+
+    static func style(for tool: EditorTool) -> (color: AnnotationColor, width: StrokeWidth) {
+        let stored = all[String(describing: tool)]
+        return (stored?.color ?? defaultColor(for: tool), stored.flatMap { StrokeWidth(rawValue: $0.width) } ?? .medium)
+    }
+
+    static func save(color: AnnotationColor, width: StrokeWidth, for tool: EditorTool) {
+        guard tool != .select, tool != .crop else { return }
+        var styles = all
+        styles[String(describing: tool)] = Style(color: color, width: width.rawValue)
+        if let data = try? JSONEncoder().encode(styles) { UserDefaults.standard.set(data, forKey: key) }
+    }
+
+    static var arrowStyle: ArrowStyle {
+        get { UserDefaults.standard.string(forKey: arrowKey).flatMap(ArrowStyle.init(rawValue:)) ?? .filled }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: arrowKey) }
+    }
+
+    static var font: TextFont {
+        get { UserDefaults.standard.string(forKey: fontKey).flatMap(TextFont.init(rawValue:)) ?? .system }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: fontKey) }
+    }
+
+    private static var all: [String: Style] {
+        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode([String: Style].self, from: $0) } ?? [:]
+    }
+
+    /// Before a tool's been used: yellow for the marker, red for the rest.
+    private static func defaultColor(for tool: EditorTool) -> AnnotationColor {
+        tool == .highlight ? .yellow : .red
     }
 }

@@ -10,12 +10,23 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         didSet {
             endTextEditing()
             if tool != .select { selectedID = nil }
+            // Each tool comes back with the color and width it was last used with.
+            if tool != .select, tool != .crop { (color, strokeWidth) = ToolStyles.style(for: tool) }
             window?.invalidateCursorRects(for: self)
             needsDisplay = true
         }
     }
     var color: AnnotationColor = .red
     var strokeWidth: StrokeWidth = .medium
+    var arrowStyle = ToolStyles.arrowStyle
+    var textFont = ToolStyles.font
+
+    /// Remembers the current color and width for the current tool.
+    func rememberStyle() {
+        ToolStyles.save(color: color, width: strokeWidth, for: tool)
+        ToolStyles.arrowStyle = arrowStyle
+        ToolStyles.font = textFont
+    }
 
     /// Called after every committed edit, undo or redo, so the toolbar can refresh.
     var onHistoryChange: (() -> Void)?
@@ -101,8 +112,10 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         guard let selectedID, var annotation = history.current.annotation(withID: selectedID) else { return }
         annotation.color = color
         annotation.lineWidth = strokeWidth.lineWidth
+        if case .arrow = annotation.shape { annotation.arrowStyle = arrowStyle }
         if case .text(let string, let frame, _) = annotation.shape {
-            let size = AnnotationRenderer.textSize(string, fontSize: strokeWidth.fontSize)
+            annotation.font = textFont
+            let size = AnnotationRenderer.textSize(string, fontSize: strokeWidth.fontSize, font: textFont)
             annotation.shape = .text(string, frame: CGRect(origin: frame.origin, size: size), fontSize: strokeWidth.fontSize)
         }
         history.apply { $0.update(annotation) }
@@ -230,7 +243,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
                 if event.clickCount == 1, window?.frame.origin == origin { onIdleClick?() }
                 return
             }
-        case .rectangle, .ellipse, .arrow, .line, .mosaic, .blur, .magnifier:
+        case .rectangle, .ellipse, .arrow, .line, .mosaic, .blur, .magnifier, .ruler:
             drag = .create(id: UUID(), from: point)
         case .pen, .highlight:
             drag = .stroke(id: UUID(), points: [point])
@@ -245,7 +258,8 @@ final class CanvasView: NSView, NSTextFieldDelegate {
                 beginTextEditing(Annotation(
                     shape: .text("", frame: CGRect(origin: origin, size: .zero), fontSize: fontSize),
                     color: color,
-                    lineWidth: strokeWidth.lineWidth
+                    lineWidth: strokeWidth.lineWidth,
+                    font: textFont
                 ))
             }
         case .counter:
@@ -280,6 +294,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
             case .blur where SelectionGeometry.isDrag(rect): .blur(rect)
             case .arrow where long: .arrow(from: from, to: end)
             case .line where long: .line(from: from, to: end)
+            case .ruler where long: .ruler(from: from, to: end)
             // The lens is round: dragged out from its center.
             case .magnifier where long:
                 .magnifier(CGRect(x: from.x - hypot(point.x - from.x, point.y - from.y), y: from.y - hypot(point.x - from.x, point.y - from.y),
@@ -291,7 +306,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
                 needsDisplay = true
                 return
             }
-            document.add(Annotation(id: id, shape: shape, color: color, lineWidth: strokeWidth.lineWidth))
+            document.add(Annotation(id: id, shape: shape, color: color, lineWidth: strokeWidth.lineWidth, arrowStyle: arrowStyle))
         case .stroke(let id, var points):
             // Skip points too close to the last one; they only add jitter.
             guard let last = points.last, hypot(point.x - last.x, point.y - last.y) >= 1.5 else { return }
@@ -359,7 +374,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.font = NSFont.systemFont(ofSize: fontSize * zoom, weight: .semibold)
+        field.font = AnnotationRenderer.nsFont(annotation.font, size: fontSize * zoom)
         field.textColor = annotation.color.nsColor
         field.delegate = self
         field.cell?.isScrollable = true
@@ -402,7 +417,7 @@ final class CanvasView: NSView, NSTextFieldDelegate {
                 return
             }
             var edited = original
-            let size = AnnotationRenderer.textSize(text, fontSize: fontSize)
+            let size = AnnotationRenderer.textSize(text, fontSize: fontSize, font: original.font)
             edited.shape = .text(text, frame: CGRect(origin: frame.origin, size: size), fontSize: fontSize)
             if document.annotation(withID: original.id) == nil {
                 document.add(edited)

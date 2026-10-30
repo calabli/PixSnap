@@ -4,7 +4,7 @@ import CoreGraphics
 #endif
 
 /// An sRGB color, kept platform-neutral so the model can be shared with other platforms.
-public struct AnnotationColor: Equatable, Sendable {
+public struct AnnotationColor: Equatable, Codable, Sendable {
     public var red: Double
     public var green: Double
     public var blue: Double
@@ -30,6 +30,39 @@ public struct AnnotationColor: Equatable, Sendable {
     public var isLight: Bool { red * 0.299 + green * 0.587 + blue * 0.114 > 0.6 }
 }
 
+/// How an arrow's ends look.
+public enum ArrowStyle: String, CaseIterable, Codable, Sendable {
+    /// A solid triangle at the end.
+    case filled
+    /// Two strokes at the end, like a hand-drawn arrow.
+    case open
+    /// Solid heads at both ends.
+    case double
+
+    public var title: String {
+        switch self {
+        case .filled: "实心箭头"
+        case .open: "线条箭头"
+        case .double: "双向箭头"
+        }
+    }
+}
+
+/// The typeface for text annotations.
+public enum TextFont: String, CaseIterable, Codable, Sendable {
+    case system, rounded, serif, kai, mono
+
+    public var title: String {
+        switch self {
+        case .system: "苹方"
+        case .rounded: "圆体"
+        case .serif: "宋体"
+        case .kai: "楷体"
+        case .mono: "等宽"
+        }
+    }
+}
+
 /// Geometry of an annotation in canvas points with a top-left origin.
 public enum AnnotationShape: Equatable, Sendable {
     case rectangle(CGRect)
@@ -48,6 +81,8 @@ public enum AnnotationShape: Equatable, Sendable {
     case blur(CGRect)
     /// A round lens over its rect, showing what's under its middle at `zoom` times.
     case magnifier(CGRect)
+    /// A measuring line with end ticks, labelled with its length in the screenshot's pixels.
+    case ruler(from: CGPoint, to: CGPoint)
 }
 
 public struct Annotation: Identifiable, Equatable, Sendable {
@@ -55,12 +90,19 @@ public struct Annotation: Identifiable, Equatable, Sendable {
     public var shape: AnnotationShape
     public var color: AnnotationColor
     public var lineWidth: CGFloat
+    /// For arrows.
+    public var arrowStyle: ArrowStyle
+    /// For text.
+    public var font: TextFont
 
-    public init(id: UUID = UUID(), shape: AnnotationShape, color: AnnotationColor, lineWidth: CGFloat) {
+    public init(id: UUID = UUID(), shape: AnnotationShape, color: AnnotationColor, lineWidth: CGFloat,
+                arrowStyle: ArrowStyle = .filled, font: TextFont = .system) {
         self.id = id
         self.shape = shape
         self.color = color
         self.lineWidth = lineWidth
+        self.arrowStyle = arrowStyle
+        self.font = font
     }
 
     public static func counterRadius(forLineWidth lineWidth: CGFloat) -> CGFloat {
@@ -82,7 +124,7 @@ public struct Annotation: Identifiable, Equatable, Sendable {
         switch shape {
         case .rectangle(let rect), .mosaic(let rect), .ellipse(let rect), .blur(let rect), .magnifier(let rect):
             return rect
-        case .arrow(let from, let to), .line(let from, let to):
+        case .arrow(let from, let to), .line(let from, let to), .ruler(let from, let to):
             return SelectionGeometry.rect(from: from, to: to)
         case .pen(let points), .highlight(let points):
             return Self.bounds(of: points).insetBy(dx: -strokeWidth / 2, dy: -strokeWidth / 2)
@@ -101,7 +143,7 @@ public struct Annotation: Identifiable, Equatable, Sendable {
             let slack = tolerance + lineWidth / 2
             return rect.insetBy(dx: -slack, dy: -slack).contains(point)
                 && !rect.insetBy(dx: slack, dy: slack).contains(point)
-        case .arrow(let from, let to), .line(let from, let to):
+        case .arrow(let from, let to), .line(let from, let to), .ruler(let from, let to):
             return Self.distance(from: point, toSegmentFrom: from, to: to) <= tolerance + lineWidth / 2
         case .pen(let points), .highlight(let points):
             let reach = tolerance + strokeWidth / 2
@@ -141,6 +183,8 @@ public struct Annotation: Identifiable, Equatable, Sendable {
             moved.shape = .line(from: CGPoint(x: from.x + dx, y: from.y + dy), to: CGPoint(x: to.x + dx, y: to.y + dy))
         case .arrow(let from, let to):
             moved.shape = .arrow(from: CGPoint(x: from.x + dx, y: from.y + dy), to: CGPoint(x: to.x + dx, y: to.y + dy))
+        case .ruler(let from, let to):
+            moved.shape = .ruler(from: CGPoint(x: from.x + dx, y: from.y + dy), to: CGPoint(x: to.x + dx, y: to.y + dy))
         case .text(let string, let frame, let fontSize):
             moved.shape = .text(string, frame: frame.offsetBy(dx: dx, dy: dy), fontSize: fontSize)
         case .counter(let number, let center):
@@ -162,6 +206,15 @@ public struct Annotation: Identifiable, Equatable, Sendable {
         let length = hypot(dx, dy)
         let angle = (atan2(dy, dx) / (.pi / 4)).rounded() * (.pi / 4)
         return CGPoint(x: from.x + cos(angle) * length, y: from.y + sin(angle) * length)
+    }
+
+    /// A ruler's reading: its length in the screenshot's pixels (`scale` pixels per point), with
+    /// "宽"/"高" for a level or upright one.
+    public static func rulerLabel(from: CGPoint, to: CGPoint, scale: CGFloat) -> String {
+        let dx = abs(to.x - from.x) * scale, dy = abs(to.y - from.y) * scale
+        if dy < 0.5 { return "宽 \(Int(dx.rounded())) px" }
+        if dx < 0.5 { return "高 \(Int(dy.rounded())) px" }
+        return "\(Int(hypot(dx, dy).rounded())) px"
     }
 
     static func distance(from point: CGPoint, toSegmentFrom a: CGPoint, to b: CGPoint) -> CGFloat {
