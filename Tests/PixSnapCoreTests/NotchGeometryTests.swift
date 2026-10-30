@@ -52,4 +52,18 @@ final class NotchGeometryTests: XCTestCase {
         XCTAssertEqual(NotchGeometry.progress(forDrag: -20, collapsed: notch, open: open), 0)
         XCTAssertEqual(NotchGeometry.progress(forDrag: 900, collapsed: notch, open: open), 1)
     }
+
+    func testHandleSizeKeepsNotchHeightAndCenter() {
+        let notch = CGRect(x: 800, y: 1131, width: 200, height: 38)
+        XCTAssertEqual(NotchGeometry.handleRect(notch, size: .medium, isNotch: true), notch)
+        XCTAssertEqual(NotchGeometry.handleRect(notch, size: .large, isNotch: true), CGRect(x: 750, y: 1131, width: 300, height: 38))
+        XCTAssertEqual(NotchGeometry.handleRect(notch, size: .small, isNotch: true), CGRect(x: 825, y: 1131, width: 150, height: 38))
+    }
+
+    func testHandleSizeScalesStandInBarFromTop() {
+        let bar = NotchGeometry.standInRect(screenFrame: CGRect(x: 0, y: 0, width: 1000, height: 800))
+        XCTAssertEqual(NotchGeometry.handleRect(bar, size: .large, isNotch: false), CGRect(x: 410, y: 788, width: 180, height: 12))
+        XCTAssertEqual(NotchGeometry.handleRect(bar, size: .small, isNotch: false), CGRect(x: 455, y: 794, width: 90, height: 6))
+    }
 }
+

@@ -20,6 +20,11 @@ final class NotchWindow: NSPanel {
     var onPick: ((HistoryEntry) -> Void)?
     /// Supplies the days to hang each time the lines are about to come down.
     var loadDays: ((String) -> Lines)?
+    /// The handle stays invisible until the mouse is over it.
+    var hidesHandle: Bool {
+        get { handle.hiddenUntilHover }
+        set { handle.hiddenUntilHover = newValue }
+    }
 
     /// What to hang: the days, what to say when there are none, and while searching, how many
     /// captures matched.
@@ -818,7 +823,19 @@ private final class HandleView: NSView {
     var showsHint = false {
         didSet {
             NSAnimationContext.runAnimationGroup { $0.duration = 0.15; hint.animator().alphaValue = showsHint ? 1 : 0 }
+            updateFill()
         }
+    }
+
+    /// Invisible until the mouse is over it. Not fully clear, or clicks would fall through to what's
+    /// underneath and it couldn't be found.
+    var hiddenUntilHover = false {
+        didSet { updateFill() }
+    }
+
+    private func updateFill() {
+        let hidden = hiddenUntilHover && !showsHint
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(hidden ? 0.01 : 1).cgColor
     }
 
     private let hint = NSTextField(labelWithString: "↓ 下拉看历史")

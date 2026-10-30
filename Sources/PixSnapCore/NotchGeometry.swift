@@ -17,6 +17,14 @@ public enum NotchGeometry {
         CGRect(x: (screenFrame.midX - width / 2).rounded(), y: screenFrame.maxY - height, width: width, height: height)
     }
 
+    /// The handle at the chosen size: `base` (the notch, or the stand-in bar) made narrower or wider
+    /// about its center. Over a notch it keeps the notch's height; the stand-in bar grows both ways.
+    public static func handleRect(_ base: CGRect, size: NotchHandleSize, isNotch: Bool) -> CGRect {
+        let width = (base.width * size.scale).rounded()
+        let height = isNotch ? base.height : (base.height * size.scale).rounded()
+        return CGRect(x: (base.midX - width / 2).rounded(), y: base.maxY - height, width: width, height: height)
+    }
+
     /// The handle while the mouse is over it: a little wider and taller, still hanging from the top.
     public static func hoverRect(for collapsed: CGRect, extraWidth: CGFloat = 40, extraHeight: CGFloat = 20) -> CGRect {
         CGRect(x: collapsed.minX - extraWidth / 2, y: collapsed.minY - extraHeight,
@@ -45,5 +53,27 @@ public enum NotchGeometry {
         let range = open.height - collapsed.height
         guard range > 0 else { return 1 }
         return max(0, min(1, distance / range))
+    }
+}
+
+/// How big the pull-down handle is.
+public enum NotchHandleSize: String, CaseIterable, Codable, Sendable {
+    case small, medium, large
+
+    public var title: String {
+        switch self {
+        case .small: "小"
+        case .medium: "中"
+        case .large: "大"
+        }
+    }
+
+    /// Against the notch's own width (or the 120 × 8 bar on other screens).
+    public var scale: CGFloat {
+        switch self {
+        case .small: 0.75
+        case .medium: 1
+        case .large: 1.5
+        }
     }
 }

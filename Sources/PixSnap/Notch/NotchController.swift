@@ -22,16 +22,20 @@ final class NotchController {
     func rebuild() {
         windows.forEach { $0.orderOut(nil) }
         windows = []
-        guard AppSettings.shared.pullsHistoryFromNotch else { return }
+        let settings = AppSettings.shared
+        guard settings.pullsHistoryFromNotch else { return }
 
         for screen in NSScreen.screens {
-            let handle = NotchGeometry.notchRect(
+            let notch = NotchGeometry.notchRect(
                 screenFrame: screen.frame,
                 topLeftArea: screen.auxiliaryTopLeftArea,
                 topRightArea: screen.auxiliaryTopRightArea,
                 safeAreaTop: screen.safeAreaInsets.top
-            ) ?? NotchGeometry.standInRect(screenFrame: screen.frame)
+            )
+            let handle = NotchGeometry.handleRect(notch ?? NotchGeometry.standInRect(screenFrame: screen.frame),
+                                                  size: settings.notchHandleSize, isNotch: notch != nil)
             let window = NotchWindow(handle: handle, screenFrame: screen.frame, menuBarHeight: Self.menuBarHeight(on: screen))
+            window.hidesHandle = settings.hidesNotchHandle
             window.loadDays = { Self.days(matching: $0) }
             window.onPick = { [weak self] entry in self?.onPick(entry) }
             window.orderFrontRegardless()

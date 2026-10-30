@@ -128,6 +128,17 @@ struct SettingsView: View {
                 Toggle("从刘海往下拉打开晾衣架", isOn: $settings.pullsHistoryFromNotch)
                     .help("没有刘海的屏幕顶部中间会有一条小黑条，往下拉也能打开")
                     .onChange(of: settings.pullsHistoryFromNotch) { onNotchSettingChange() }
+                Picker("把手大小", selection: $settings.notchHandleSize) {
+                    ForEach(NotchHandleSize.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .help("刘海处可以抓的宽度；没有刘海的屏幕上小黑条也跟着变大变小")
+                .disabled(!settings.pullsHistoryFromNotch)
+                .onChange(of: settings.notchHandleSize) { onNotchSettingChange() }
+                Toggle("隐藏把手，鼠标移上去才显示", isOn: $settings.hidesNotchHandle)
+                    .help("平时看不见，但还在原处，鼠标移到屏幕顶部中间就会出现，照样可以往下拉")
+                    .disabled(!settings.pullsHistoryFromNotch)
+                    .onChange(of: settings.hidesNotchHandle) { onNotchSettingChange() }
                 Picker("保留时长", selection: $settings.historyRetentionDays) {
                     ForEach(AppSettings.historyRetentionChoices, id: \.self) { days in
                         Text(days.map { "\($0) 天" } ?? "永久").tag(days)

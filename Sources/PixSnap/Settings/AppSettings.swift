@@ -81,6 +81,16 @@ final class AppSettings {
         didSet { defaults.set(pullsHistoryFromNotch, forKey: Keys.pullsHistoryFromNotch) }
     }
 
+    /// How big the pull-down handle is.
+    var notchHandleSize: NotchHandleSize {
+        didSet { defaults.set(notchHandleSize.rawValue, forKey: Keys.notchHandleSize) }
+    }
+
+    /// Whether the handle stays invisible until the mouse is over it.
+    var hidesNotchHandle: Bool {
+        didSet { defaults.set(hidesNotchHandle, forKey: Keys.hidesNotchHandle) }
+    }
+
     /// How the clothesline ropes look.
     var ropeStyle: RopeStyle {
         didSet { if let data = try? JSONEncoder().encode(ropeStyle) { defaults.set(data, forKey: Keys.ropeStyle) } }
@@ -110,6 +120,8 @@ final class AppSettings {
         static let historyRetentionDays = "historyRetentionDays"
         static let pullsHistoryFromNotch = "pullsHistoryFromNotch"
         static let ropeStyle = "ropeStyle"
+        static let notchHandleSize = "notchHandleSize"
+        static let hidesNotchHandle = "hidesNotchHandle"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -139,6 +151,8 @@ final class AppSettings {
         let days = defaults.object(forKey: Keys.historyRetentionDays) as? Int ?? 30
         historyRetentionDays = days > 0 ? days : nil
         pullsHistoryFromNotch = defaults.object(forKey: Keys.pullsHistoryFromNotch) as? Bool ?? true
+        notchHandleSize = defaults.string(forKey: Keys.notchHandleSize).flatMap(NotchHandleSize.init(rawValue:)) ?? .medium
+        hidesNotchHandle = defaults.bool(forKey: Keys.hidesNotchHandle)
         ropeStyle = defaults.data(forKey: Keys.ropeStyle)
             .flatMap { try? JSONDecoder().decode(RopeStyle.self, from: $0) } ?? .default
         launchAtLoginStatus = SMAppService.mainApp.status
