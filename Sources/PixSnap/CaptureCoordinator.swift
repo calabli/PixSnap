@@ -527,10 +527,11 @@ final class CaptureCoordinator {
 
     /// Development: a long screenshot of `region` (global AppKit coordinates) without selecting it,
     /// finished after `seconds`, also written to `output` as PNG.
-    func startScrollingCapture(in region: CGRect, finishingAfter seconds: Double, writingTo output: URL?) {
+    func startScrollingCapture(in region: CGRect, finishingAfter seconds: Double, writingTo output: URL?, autoScrolling: Bool = false) {
         guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(region) }) else { return }
         startScrolling(in: region, on: screen, sourceApp: nil)
         let session = scrollSession
+        if autoScrolling { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { session?.toggleAutoScroll() } }
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { session?.finishNow() }
         scrollOutput = output
     }

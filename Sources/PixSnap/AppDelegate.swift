@@ -91,7 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if numbers.count == 4 {
                 coordinator.startScrollingCapture(in: CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3]),
                                                   finishingAfter: Double(arguments[flag + 2]) ?? 5,
-                                                  writingTo: URL(fileURLWithPath: arguments[flag + 3]))
+                                                  writingTo: URL(fileURLWithPath: arguments[flag + 3]),
+                                                  autoScrolling: arguments.contains("--auto"))
             }
         }
         if let flag = arguments.firstIndex(of: "--overlay"), arguments.indices.contains(flag + 1) {

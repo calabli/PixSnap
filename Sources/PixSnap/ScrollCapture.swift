@@ -4,8 +4,10 @@ import PixSnapCore
 /// A long screenshot in progress: the selected region stays outlined with the rest of the screen
 /// dimmed, and while the person scrolls the content inside it (with the mouse or trackpad, in
 /// whatever app it is, down or up), the region is captured several times a second and the rows
-/// that come into view are stitched on at the bottom or the top. A preview beside the region shows the long image growing; Return or 完成 finishes,
-/// Esc or 取消 gives up.
+/// that come into view are stitched on at the bottom or the top. 自动滚动 scrolls it instead, a
+/// step at a time, until the content stops moving (the end), the image is as long as it can be, or
+/// it loses its place; scrolling events need PixSnap allowed under 辅助功能. A preview to the left
+/// of the region shows the long image growing; Return or 完成 finishes, Esc or 取消 gives up.
 ///
 /// PixSnap's own windows are left out of the captures, and the frame and dimming ignore the mouse,
 /// so scrolling goes straight to the app underneath. That app keeps the keyboard too, so Esc and
@@ -26,9 +28,17 @@ final class ScrollCaptureSession {
     private var lastPreview = Date.distantPast
     private let escapeKey = HotKey()
     private let returnKey = HotKey()
+    /// Scrolling by itself, and how many steps in a row brought nothing new.
+    private var isAutoScrolling = false
+    private var stalledSteps = 0
+    /// Shown instead of the usual hint once scrolling by itself has reached the end, until
+    /// something new comes into view.
+    private var endMessage: String?
 
     /// About eight captures a second: smooth enough to follow normal scrolling.
     private static let interval: Duration = .milliseconds(120)
+    /// While scrolling by itself: time for the app to draw (and finish any smooth scroll) after each step.
+    private static let autoInterval: Duration = .milliseconds(320)
 
     init(region: CGRect, on screen: NSScreen) {
         self.screen = screen
@@ -41,6 +51,7 @@ final class ScrollCaptureSession {
         preview = StitchPreviewWindow(region: self.region, screen: screen)
         controls.onDone = { [weak self] in self?.finish() }
         controls.onCancel = { [weak self] in self?.cancel() }
+        controls.onAutoScroll = { [weak self] in self?.toggleAutoScroll() }
     }
 
     func start() {
@@ -65,22 +76,95 @@ final class ScrollCaptureSession {
                 let stitcher = self.stitcher
                 let outcome = await Task.detached(priority: .userInitiated) { stitcher.add(image) }.value
                 show(outcome)
+                if isAutoScrolling { autoStep(after: outcome) }
             } catch {
                 NSLog("PixSnap long screenshot capture failed: \(error)")
             }
-            try? await Task.sleep(for: Self.interval)
+            try? await Task.sleep(for: isAutoScrolling ? Self.autoInterval : Self.interval)
         }
+    }
+
+    // MARK: Scrolling by itself
+
+    /// Starts scrolling (the pointer moves into the region, so the scrolling reaches the app
+    /// there), or stops.
+    func toggleAutoScroll() {
+        guard isRunning else { return }
+        if isAutoScrolling {
+            stopAutoScroll(saying: nil)
+            return
+        }
+        guard PermissionGuide.ensureAccessibility() else {
+            controls.status = "自动滚动需要在“系统设置 › 隐私与安全性 › 辅助功能”里允许 PixSnap"
+            controls.isWarning = true
+            return
+        }
+        CGWarpMouseCursorPosition(regionCenter)
+        endMessage = nil
+        isAutoScrolling = true
+        stalledSteps = 0
+        controls.isAutoScrolling = true
+    }
+
+    private func stopAutoScroll(saying message: String?) {
+        isAutoScrolling = false
+        controls.isAutoScrolling = false
+        if let message {
+            controls.status = message
+            controls.isWarning = false
+        }
+    }
+
+    /// After each capture: on to the next step, or stop when the end is reached or something's off.
+    private func autoStep(after outcome: ScrollStitcher.Outcome?) {
+        switch outcome {
+        case .added, .started:
+            stalledSteps = 0
+        case .full:
+            return stopAutoScroll(saying: nil)
+        case .lost:
+            // Back up a little so the next frame overlaps what's taken, then carry on more gently.
+            Self.scroll(by: -step / 2, at: regionCenter)
+            return
+        default:
+            stalledSteps += 1
+            // A few steps with nothing new: the bottom.
+            if stalledSteps >= 3 {
+                let height = Int((CGFloat(stitcher.height) / scale).rounded())
+                endMessage = "已经滚到底了（\(height) 点高），按回车完成"
+                return stopAutoScroll(saying: endMessage)
+            }
+        }
+        Self.scroll(by: step, at: regionCenter)
+    }
+
+    /// Each step moves the content by under half the region, so frames overlap well.
+    private var step: CGFloat { max(40, (region.height * 0.4).rounded()) }
+
+    /// The region's middle in Quartz's global coordinates (top-left origin, main display).
+    private var regionCenter: CGPoint {
+        let mainHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        return CGPoint(x: region.midX, y: mainHeight - region.midY)
+    }
+
+    /// A scroll-wheel event, in pixels; positive moves the content up (toward what's below).
+    private static func scroll(by points: CGFloat, at location: CGPoint) {
+        guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                  wheel1: Int32(-points.rounded()), wheel2: 0, wheel3: 0) else { return }
+        event.location = location
+        event.post(tap: .cghidEventTap)
     }
 
     private func show(_ outcome: ScrollStitcher.Outcome?) {
         let height = Int((CGFloat(stitcher.height) / scale).rounded())
         switch outcome {
         case .started, .unchanged, .moved, nil:
-            controls.status = stitcher.height > stitcher.frameHeight
+            controls.status = endMessage ?? (stitcher.height > stitcher.frameHeight
                 ? "已拼接 \(height) 点高 · 继续上下滚动，或按回车完成"
-                : "在框里上下滚动内容（鼠标滚轮或触控板）"
+                : "在框里上下滚动内容，或点“自动滚动”")
             controls.isWarning = false
         case .added, .addedAbove:
+            endMessage = nil
             controls.status = "已拼接 \(height) 点高 · 继续上下滚动，或按回车完成"
             controls.isWarning = false
         case .lost:
@@ -110,6 +194,7 @@ final class ScrollCaptureSession {
     private func finish() {
         guard isRunning else { return }
         isRunning = false
+        isAutoScrolling = false
         let image = stitcher.image()
         close()
         onFinish?(image.map { Capture(image: $0, scale: scale) })
@@ -118,6 +203,7 @@ final class ScrollCaptureSession {
     private func cancel() {
         guard isRunning else { return }
         isRunning = false
+        isAutoScrolling = false
         close()
         onFinish?(nil)
     }
@@ -225,16 +311,24 @@ final class RegionFrameWindow: NSPanel {
     }
 }
 
-/// The long image growing, beside the region: scaled to fit its width, showing the newest part.
+/// The long image growing, to the left of the region: scaled to fit its width, showing the newest part.
 @MainActor
 private final class StitchPreviewWindow: NSPanel {
     private let imageLayer = CALayer()
-    private let width: CGFloat = 150
+    private let width: CGFloat = 180
 
     init(region: CGRect, screen: NSScreen) {
         let visible = screen.visibleFrame
-        // To the right of the region when there's room, otherwise to the left.
-        let x = region.maxX + 16 + width <= visible.maxX ? region.maxX + 16 : max(visible.minX + 8, region.minX - 16 - width)
+        // To the left of the region when there's room, otherwise to the right; with no room on
+        // either side, inside the region's left edge.
+        let x: CGFloat
+        if region.minX - 16 - width >= visible.minX {
+            x = region.minX - 16 - width
+        } else if region.maxX + 16 + width <= visible.maxX {
+            x = region.maxX + 16
+        } else {
+            x = region.minX + 8
+        }
         let height = min(region.height, visible.height - 40)
         let frame = CGRect(x: x, y: region.maxY - height, width: width, height: height)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -281,6 +375,15 @@ private final class StitchPreviewWindow: NSPanel {
 private final class ScrollControlsPanel: NSPanel {
     var onDone: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onAutoScroll: (() -> Void)?
+
+    var isAutoScrolling = false {
+        didSet {
+            auto.title = isAutoScrolling ? "停止滚动" : "自动滚动"
+            auto.image = NSImage(systemSymbolName: isAutoScrolling ? "stop.fill" : "arrow.down.circle", accessibilityDescription: nil)
+            layOut()
+        }
+    }
 
     var status = "" {
         didSet { label.stringValue = status; layOut() }
@@ -293,6 +396,8 @@ private final class ScrollControlsPanel: NSPanel {
     private let label = NSTextField(labelWithString: "")
     private let done = NSButton(title: "完成", target: nil, action: nil)
     private let cancel = NSButton(title: "取消", target: nil, action: nil)
+    private let auto = NSButton(title: "自动滚动", image: NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)!,
+                                target: nil, action: nil)
     private let content = NSVisualEffectView()
     private var region = CGRect.zero
     private var screenArea = CGRect.zero
@@ -322,9 +427,14 @@ private final class ScrollControlsPanel: NSPanel {
         cancel.target = self
         cancel.action = #selector(cancelClicked)
         cancel.bezelStyle = .rounded
+        auto.target = self
+        auto.action = #selector(autoClicked)
+        auto.bezelStyle = .rounded
+        auto.imagePosition = .imageLeading
+        auto.toolTip = "让 PixSnap 自己往下滚，滚到底自动停（需要“辅助功能”权限）"
         let icon = NSImageView(image: NSImage(systemSymbolName: "arrow.down.to.line.compact", accessibilityDescription: "长截图")!)
         icon.contentTintColor = .controlAccentColor
-        let stack = NSStackView(views: [icon, label, cancel, done])
+        let stack = NSStackView(views: [icon, label, auto, cancel, done])
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 8)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -337,7 +447,7 @@ private final class ScrollControlsPanel: NSPanel {
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
         contentView = content
-        status = "在框里上下滚动内容（鼠标滚轮或触控板）"
+        status = "在框里上下滚动内容，或点“自动滚动”"
     }
 
     override var canBecomeKey: Bool { true }
@@ -354,7 +464,7 @@ private final class ScrollControlsPanel: NSPanel {
 
     private func layOut() {
         guard screenArea != .zero else { return }
-        let size = CGSize(width: min(max(content.fittingSize.width, 360), screenArea.width - 20), height: 40)
+        let size = CGSize(width: min(max(content.fittingSize.width, 480), screenArea.width - 20), height: 40)
         var y = region.minY - size.height - 10
         if y < screenArea.minY + 4 { y = region.maxY + 10 }
         if y + size.height > screenArea.maxY { y = region.minY + 12 }
@@ -364,4 +474,5 @@ private final class ScrollControlsPanel: NSPanel {
 
     @objc private func doneClicked() { onDone?() }
     @objc private func cancelClicked() { onCancel?() }
+    @objc private func autoClicked() { onAutoScroll?() }
 }
