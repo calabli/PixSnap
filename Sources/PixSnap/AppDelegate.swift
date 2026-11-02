@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The menu items for each capture mode, to show their shortcuts.
     private var captureMenuItems: [CaptureAction: NSMenuItem] = [:]
     private lazy var notch = NotchController { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) }
+    private let notchConflicts = NotchConflictGuide()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The floating bar's buttons are icons; their names show on hover, so show them soon.
@@ -27,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         notch.rebuild()
         settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
         Updater.shared.start()
+        notchConflicts.onTurnedOff = { [weak self] in self?.notch.rebuild() }
+        notchConflicts.start()
 
         captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItems() }
         let taken = captureShortcut.start()

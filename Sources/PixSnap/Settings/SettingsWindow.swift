@@ -72,6 +72,9 @@ struct SettingsView: View {
         return (parts + [size]).joined(separator: " · ")
     }
 
+    /// Other notch apps running now (NotchNook and the like).
+    private var notchApps: [String] { NotchConflictGuide.running }
+
     private var microphoneAvailable: Bool {
         if #available(macOS 15, *) { true } else { false }
     }
@@ -138,6 +141,12 @@ struct SettingsView: View {
                 Toggle("从刘海往下拉打开晾衣架", isOn: $settings.pullsHistoryFromNotch)
                     .help("没有刘海的屏幕顶部中间会有一条小黑条，往下拉也能打开")
                     .onChange(of: settings.pullsHistoryFromNotch) { onNotchSettingChange() }
+                if settings.pullsHistoryFromNotch, !notchApps.isEmpty {
+                    Label("\(notchApps.joined(separator: "、")) 也在用刘海，鼠标移到刘海时两边都会反应，可能互相挡住。可以关掉上面这项，改从菜单栏打开晾衣架。",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
                 Picker("把手大小", selection: $settings.notchHandleSize) {
                     ForEach(NotchHandleSize.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
