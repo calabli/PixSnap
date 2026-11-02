@@ -1,0 +1,15 @@
+#!/bin/bash
+# Runs as root after Installer puts PixSnap in /Applications: quits a copy that's still running
+# (an older one) and opens the new one for the person at the screen, so an update ends with
+# PixSnap back in the menu bar instead of gone.
+APP="${3%/}/Applications/PixSnap.app"
+USER_NAME="$(stat -f %Su /dev/console)"
+[ -d "$APP" ] && [ -n "$USER_NAME" ] && [ "$USER_NAME" != "root" ] || exit 0
+
+pkill -x PixSnap 2>/dev/null || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -x PixSnap >/dev/null || break
+    sleep 0.3
+done
+launchctl asuser "$(id -u "$USER_NAME")" sudo -u "$USER_NAME" /usr/bin/open "$APP" || true
+exit 0

@@ -22,7 +22,9 @@ cp Resources/Installer/*.html "$WORK/resources/"
 # Mac (a build folder, say) instead of the one in /Applications.
 pkgbuild --analyze --root "$WORK/root" "$WORK/components.plist" >/dev/null
 /usr/libexec/PlistBuddy -c "Add :0:BundleIsRelocatable bool false" "$WORK/components.plist"
+# The postinstall script opens PixSnap again once it's in place (after an update, too).
 pkgbuild --root "$WORK/root" --component-plist "$WORK/components.plist" --install-location /Applications \
+    --scripts Resources/Installer/scripts \
     --identifier com.pixsnap.PixSnap.app --version "$VERSION" "$WORK/PixSnap-app.pkg" >/dev/null
 
 cat > "$WORK/distribution.xml" <<XML
@@ -31,7 +33,7 @@ cat > "$WORK/distribution.xml" <<XML
     <title>PixSnap $VERSION</title>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
-    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <options customize="never" require-scripts="true" hostArchitectures="arm64,x86_64"/>
     <domains enable_localSystem="true"/>
     <volume-check>
         <allowed-os-versions><os-version min="14.0"/></allowed-os-versions>

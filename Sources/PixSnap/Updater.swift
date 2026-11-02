@@ -5,7 +5,8 @@ import PixSnapCore
 /// 自动更新: reads `latest.json` from the newest GitHub release (a plain download, not the API, so
 /// there's no rate limit), and when it's a newer version that runs on this Mac, says what's new.
 /// "下载并安装" downloads the installer, checks it against the SHA-256 in `latest.json`, opens it in
-/// the system's Installer and quits, so the new version can take PixSnap's place.
+/// the system's Installer and quits, so the new version can take PixSnap's place; the installer
+/// opens it again when it's done.
 ///
 /// Checks a little after launch and then once a day while "自动检查更新" is on, showing up only for a
 /// new version. "检查更新…" in the menu opens the window right away, spinning while it checks, then
@@ -418,7 +419,7 @@ final class UpdateWindow: NSPanel {
 
     func setOpeningInstaller() {
         later.isEnabled = false
-        status.stringValue = "正在打开安装器，PixSnap 会先退出；装好后从“应用程序”里重新打开它"
+        status.stringValue = "正在打开安装器，PixSnap 会先退出，装好后自动重新打开"
     }
 
     func setFailed(_ message: String) {
