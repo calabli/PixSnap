@@ -7,6 +7,8 @@ final class CaptureActionTests: XCTestCase {
         XCTAssertEqual(Set(shortcuts).count, shortcuts.count)
         XCTAssertTrue(shortcuts.allSatisfy(\.isUsableGlobally))
         XCTAssertEqual(CaptureAction.window.defaultShortcut.displayString, "⌥⇧4")
+        XCTAssertEqual(CaptureAction.clothesline.defaultShortcut.displayString, "⌥⇧H")
+        XCTAssertFalse(CaptureAction.captureModes.contains(.clothesline))
     }
 
     func testWindowStyleFallsBackFieldByField() throws {

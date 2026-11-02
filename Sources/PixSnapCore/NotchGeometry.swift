@@ -25,6 +25,19 @@ public enum NotchGeometry {
         return CGRect(x: (base.midX - width / 2).rounded(), y: base.maxY - height, width: width, height: height)
     }
 
+    /// The handle beside the notch instead of on it, leaving the notch to another app: a bar like
+    /// the stand-in one (sized by `size`), hanging from the top edge `gap` points from the notch.
+    /// Without a notch, `notch` is nil and the bar keeps clear of the middle 220 points, where
+    /// notch apps put their own.
+    public static func besideRect(notch: CGRect?, screenFrame: CGRect, size: NotchHandleSize, position: NotchHandlePosition,
+                                  gap: CGFloat = 10) -> CGRect {
+        let width = (120 * size.scale).rounded(), height = (8 * size.scale).rounded()
+        let reserved = notch ?? CGRect(x: screenFrame.midX - 110, y: screenFrame.maxY - height, width: 220, height: height)
+        var x = position == .left ? reserved.minX - gap - width : reserved.maxX + gap
+        x = min(max(x, screenFrame.minX), screenFrame.maxX - width)
+        return CGRect(x: x.rounded(), y: screenFrame.maxY - height, width: width, height: height)
+    }
+
     /// The handle while the mouse is over it: a little wider and taller, still hanging from the top.
     public static func hoverRect(for collapsed: CGRect, extraWidth: CGFloat = 40, extraHeight: CGFloat = 20) -> CGRect {
         CGRect(x: collapsed.minX - extraWidth / 2, y: collapsed.minY - extraHeight,
@@ -74,6 +87,19 @@ public enum NotchHandleSize: String, CaseIterable, Codable, Sendable {
         case .small: 0.75
         case .medium: 1
         case .large: 1.5
+        }
+    }
+}
+
+/// Where the pull-down handle sits: on the notch, or beside it when another app uses the notch.
+public enum NotchHandlePosition: String, CaseIterable, Codable, Sendable {
+    case notch, left, right
+
+    public var title: String {
+        switch self {
+        case .notch: "刘海处"
+        case .left: "刘海左边"
+        case .right: "刘海右边"
         }
     }
 }

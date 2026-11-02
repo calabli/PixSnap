@@ -32,14 +32,26 @@ final class NotchController {
                 topRightArea: screen.auxiliaryTopRightArea,
                 safeAreaTop: screen.safeAreaInsets.top
             )
-            let handle = NotchGeometry.handleRect(notch ?? NotchGeometry.standInRect(screenFrame: screen.frame),
-                                                  size: settings.notchHandleSize, isNotch: notch != nil)
+            let handle = settings.notchHandlePosition == .notch
+                ? NotchGeometry.handleRect(notch ?? NotchGeometry.standInRect(screenFrame: screen.frame),
+                                           size: settings.notchHandleSize, isNotch: notch != nil)
+                : NotchGeometry.besideRect(notch: notch, screenFrame: screen.frame, size: settings.notchHandleSize,
+                                           position: settings.notchHandlePosition)
             let window = NotchWindow(handle: handle, screenFrame: screen.frame, menuBarHeight: Self.menuBarHeight(on: screen))
             window.hidesHandle = settings.hidesNotchHandle
             window.loadDays = { Self.days(matching: $0) }
             window.onPick = { [weak self] entry in self?.onPick(entry) }
             window.orderFrontRegardless()
             windows.append(window)
+        }
+    }
+
+    /// The shortcut: puts the clothesline away if it's out, otherwise opens it under the cursor.
+    func toggleOnScreenUnderMouse() {
+        if let open = windows.first(where: \.isOpen) {
+            open.collapse()
+        } else {
+            openOnScreenUnderMouse()
         }
     }
 

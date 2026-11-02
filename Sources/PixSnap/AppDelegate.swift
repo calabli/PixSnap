@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         notch.rebuild()
         settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
         Updater.shared.start()
-        notchConflicts.onTurnedOff = { [weak self] in self?.notch.rebuild() }
+        notchConflicts.onChange = { [weak self] in self?.notch.rebuild() }
         notchConflicts.start()
 
         captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItems() }
@@ -122,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.button?.image?.isTemplate = true
 
         let menu = NSMenu()
-        for action in CaptureAction.allCases {
+        for action in CaptureAction.captureModes {
             let item = NSMenuItem(title: action.title, action: #selector(captureFromMenu(_:)), keyEquivalent: "")
             item.representedObject = action.rawValue
             menu.addItem(item)
@@ -132,7 +132,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recentMenu.delegate = self
         recent.submenu = recentMenu
         menu.addItem(recent)
-        menu.addItem(NSMenuItem(title: "打开晾衣架", action: #selector(openClothesline), keyEquivalent: ""))
+        let clothesline = NSMenuItem(title: CaptureAction.clothesline.title, action: #selector(openClothesline), keyEquivalent: "")
+        menu.addItem(clothesline)
+        captureMenuItems[.clothesline] = clothesline
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "打开截图文件夹", action: #selector(openSaveFolder), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ","))
@@ -177,6 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .delayed: coordinator.startDelayedCapture()
         case .window: coordinator.startWindowCapture()
         case .recording: coordinator.toggleRecording()
+        case .clothesline: notch.toggleOnScreenUnderMouse()
         }
     }
 

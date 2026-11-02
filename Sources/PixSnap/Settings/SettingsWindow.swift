@@ -141,12 +141,19 @@ struct SettingsView: View {
                 Toggle("从刘海往下拉打开晾衣架", isOn: $settings.pullsHistoryFromNotch)
                     .help("没有刘海的屏幕顶部中间会有一条小黑条，往下拉也能打开")
                     .onChange(of: settings.pullsHistoryFromNotch) { onNotchSettingChange() }
-                if settings.pullsHistoryFromNotch, !notchApps.isEmpty {
-                    Label("\(notchApps.joined(separator: "、")) 也在用刘海，鼠标移到刘海时两边都会反应，可能互相挡住。可以关掉上面这项，改从菜单栏打开晾衣架。",
+                if settings.pullsHistoryFromNotch, settings.notchHandlePosition == .notch, !notchApps.isEmpty {
+                    Label("\(notchApps.joined(separator: "、")) 也在用刘海，鼠标移到刘海时两边都会反应，可能互相挡住。可以把下面的把手挪到刘海旁边，或者关掉这项，改用快捷键 \(settings.shortcut(for: .clothesline).displayString) 打开晾衣架。",
                           systemImage: "exclamationmark.triangle.fill")
                         .font(.callout)
                         .foregroundStyle(.orange)
                 }
+                Picker("把手位置", selection: $settings.notchHandlePosition) {
+                    ForEach(NotchHandlePosition.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .help("和 NotchNook 这类刘海应用一起用时，把把手挪到刘海旁边，刘海留给它")
+                .disabled(!settings.pullsHistoryFromNotch)
+                .onChange(of: settings.notchHandlePosition) { onNotchSettingChange() }
                 Picker("把手大小", selection: $settings.notchHandleSize) {
                     ForEach(NotchHandleSize.allCases, id: \.self) { Text($0.title).tag($0) }
                 }

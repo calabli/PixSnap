@@ -1,14 +1,15 @@
 import AppKit
 import PixSnapCore
 
-/// When another notch app (NotchNook and the like, see `NotchConflict`) is running while
-/// "从刘海往下拉打开晾衣架" is on, says that both answer the mouse at the notch, and offers to turn the
-/// pull-down off (the clothesline still opens from the menu) or to keep both. Asked once per app:
-/// a few seconds after launch, and when one of them starts later.
+/// When another notch app (NotchNook and the like, see `NotchConflict`) is running while the
+/// clothesline's handle is on the notch, says that both answer the mouse there, and offers to move
+/// the handle beside the notch, to turn the pull-down off (the clothesline still opens with its
+/// shortcut or from the menu), or to keep both. Asked once per app: a few seconds after launch,
+/// and when one of them starts later.
 @MainActor
 final class NotchConflictGuide {
-    /// The pull-down was turned off here; the handles need rebuilding.
-    var onTurnedOff: (() -> Void)?
+    /// The handle was moved or the pull-down turned off here; the handles need rebuilding.
+    var onChange: (() -> Void)?
 
     private var observer: NSObjectProtocol?
     private var isAsking = false
@@ -35,7 +36,8 @@ final class NotchConflictGuide {
     }
 
     private func check() {
-        guard AppSettings.shared.pullsHistoryFromNotch, !isAsking else { return }
+        let settings = AppSettings.shared
+        guard settings.pullsHistoryFromNotch, settings.notchHandlePosition == .notch, !isAsking else { return }
         let kept = Set(UserDefaults.standard.stringArray(forKey: Self.keptKey) ?? [])
         let apps = Self.running.filter { !kept.contains($0) }
         guard !apps.isEmpty else { return }
@@ -48,18 +50,23 @@ final class NotchConflictGuide {
         alert.informativeText = """
         鼠标移到刘海、往下拉的时候，\(names) 和 PixSnap 的晾衣架都会做出反应，可能会互相挡住。
 
-        可以关掉 PixSnap 的“从刘海往下拉”，晾衣架改从菜单栏 › 打开晾衣架打开；也可以两个都留着。设置 › 截图历史里随时能改。
+        可以把晾衣架的把手挪到刘海右边，刘海留给 \(names)，往下拉的用法不变；也可以关掉“从刘海往下拉”。不管哪种，都能随时按 \(settings.shortcut(for: .clothesline).displayString) 打开晾衣架。设置 › 截图历史里随时能改。
         """
         if let icon = NSWorkspace.shared.runningApplications.first(where: { apps.contains($0.localizedName ?? "") })?.icon {
             alert.icon = icon
         }
+        alert.addButton(withTitle: "把手挪到刘海右边")
         alert.addButton(withTitle: "关掉刘海下拉")
         alert.addButton(withTitle: "两个都留着")
         NSApp.activate()
-        if alert.runModal() == .alertFirstButtonReturn {
-            AppSettings.shared.pullsHistoryFromNotch = false
-            onTurnedOff?()
-        } else {
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            settings.notchHandlePosition = .right
+            onChange?()
+        case .alertSecondButtonReturn:
+            settings.pullsHistoryFromNotch = false
+            onChange?()
+        default:
             UserDefaults.standard.set(Array(kept.union(apps)), forKey: Self.keptKey)
         }
     }

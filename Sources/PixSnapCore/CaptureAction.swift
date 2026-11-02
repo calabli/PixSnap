@@ -1,6 +1,6 @@
 import Foundation
 
-/// The ways to take a screenshot, each with its own global shortcut.
+/// The ways to take a screenshot, and opening the clothesline, each with its own global shortcut.
 public enum CaptureAction: String, Codable, CaseIterable, Sendable {
     /// Select a region (or click a window) on the frozen screen.
     case region
@@ -14,6 +14,11 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
     case window
     /// A screen recording of a region, kept as MP4 or GIF.
     case recording
+    /// Not a capture: opens the clothesline (or puts it away), without going to the notch.
+    case clothesline
+
+    /// The ones that take a screenshot or recording.
+    public static var captureModes: [CaptureAction] { allCases.filter { $0 != .clothesline } }
 
     public var title: String {
         switch self {
@@ -23,11 +28,12 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
         case .delayed: "延时截图"
         case .window: "截取窗口"
         case .recording: "录屏"
+        case .clothesline: "打开晾衣架"
         }
     }
 
     /// ⌘⇧2 for the everyday one; the others on ⌥⇧ and a number, away from the system's ⌘⇧3/4/5.
-    /// 18–21 and 23 are the "1"–"5" keys on macOS.
+    /// 18–21 and 23 are the "1"–"5" keys on macOS; the clothesline is ⌥⇧H, for history (4 is "H").
     public var defaultShortcut: Shortcut {
         switch self {
         case .region: .defaultCapture
@@ -36,6 +42,7 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
         case .delayed: Shortcut(keyCode: 20, modifiers: [.option, .shift], keyLabel: "3")
         case .window: Shortcut(keyCode: 21, modifiers: [.option, .shift], keyLabel: "4")
         case .recording: Shortcut(keyCode: 23, modifiers: [.option, .shift], keyLabel: "5")
+        case .clothesline: Shortcut(keyCode: 4, modifiers: [.option, .shift], keyLabel: "H")
         }
     }
 }

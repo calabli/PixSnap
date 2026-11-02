@@ -106,6 +106,11 @@ final class AppSettings {
         didSet { defaults.set(notchHandleSize.rawValue, forKey: Keys.notchHandleSize) }
     }
 
+    /// On the notch, or beside it (when another app uses the notch).
+    var notchHandlePosition: NotchHandlePosition {
+        didSet { defaults.set(notchHandlePosition.rawValue, forKey: Keys.notchHandlePosition) }
+    }
+
     /// Whether the handle stays invisible until the mouse is over it.
     var hidesNotchHandle: Bool {
         didSet { defaults.set(hidesNotchHandle, forKey: Keys.hidesNotchHandle) }
@@ -161,6 +166,7 @@ final class AppSettings {
         static let checksForUpdates = "checksForUpdates"
         static let autoBeautify = "autoBeautify"
         static let hidesNotchHandle = "hidesNotchHandle"
+        static let notchHandlePosition = "notchHandlePosition"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -196,6 +202,7 @@ final class AppSettings {
         pullsHistoryFromNotch = defaults.object(forKey: Keys.pullsHistoryFromNotch) as? Bool ?? true
         notchHandleSize = defaults.string(forKey: Keys.notchHandleSize).flatMap(NotchHandleSize.init(rawValue:)) ?? .medium
         hidesNotchHandle = defaults.bool(forKey: Keys.hidesNotchHandle)
+        notchHandlePosition = defaults.string(forKey: Keys.notchHandlePosition).flatMap(NotchHandlePosition.init(rawValue:)) ?? .notch
         checksForUpdates = defaults.object(forKey: Keys.checksForUpdates) as? Bool ?? true
         autoBeautify = defaults.string(forKey: Keys.autoBeautify) ?? Self.autoBeautifyOff
         ropeStyle = defaults.data(forKey: Keys.ropeStyle)

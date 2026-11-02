@@ -65,5 +65,21 @@ final class NotchGeometryTests: XCTestCase {
         XCTAssertEqual(NotchGeometry.handleRect(bar, size: .large, isNotch: false), CGRect(x: 410, y: 788, width: 180, height: 12))
         XCTAssertEqual(NotchGeometry.handleRect(bar, size: .small, isNotch: false), CGRect(x: 455, y: 794, width: 90, height: 6))
     }
+
+    func testBesideRectKeepsClearOfTheNotch() {
+        let screen = CGRect(x: 0, y: 0, width: 1800, height: 1169)
+        let notch = CGRect(x: 790, y: 1131, width: 220, height: 38)
+        let right = NotchGeometry.besideRect(notch: notch, screenFrame: screen, size: .medium, position: .right)
+        XCTAssertEqual(right, CGRect(x: 1020, y: 1161, width: 120, height: 8))
+        let left = NotchGeometry.besideRect(notch: notch, screenFrame: screen, size: .large, position: .left)
+        XCTAssertEqual(left, CGRect(x: 600, y: 1157, width: 180, height: 12))
+    }
+
+    func testBesideRectWithoutNotchAvoidsTheMiddle() {
+        let screen = CGRect(x: -903, y: 1169, width: 3360, height: 1890)
+        let right = NotchGeometry.besideRect(notch: nil, screenFrame: screen, size: .medium, position: .right)
+        XCTAssertEqual(right.minX, screen.midX + 110 + 10)
+        XCTAssertEqual(right.maxY, screen.maxY)
+    }
 }
 

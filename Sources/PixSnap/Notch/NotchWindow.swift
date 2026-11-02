@@ -209,6 +209,14 @@ final class NotchWindow: NSPanel {
     }
 
     /// Brings the lines down without a gesture (menu bar item).
+    /// Whether the lines are out (or coming down).
+    var isOpen: Bool {
+        switch phase {
+        case .open, .pulling: true
+        default: false
+        }
+    }
+
     func openNow() {
         guard case .collapsed = phase else { return }
         prepareLines()
