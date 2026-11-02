@@ -30,6 +30,8 @@ scripts/package-dmg.sh
 scripts/package-pkg.sh
 ```
 
+应用图标是 `scripts/make-icon.swift` 画出来的（蓝色圆角方块、取景框四角，中间一张夹在晾衣绳上的照片），改了以后运行 `swift scripts/make-icon.swift` 重新生成 `Resources/AppIcon.icns`。
+
 现在用开发证书签名、没有公证，别的 Mac 第一次打开会被拦下：在“系统设置 › 隐私与安全性”底部点“仍要打开”。
 
 发布新版本：先改 `Resources/Info.plist` 里的版本号，打好 pkg 和 dmg，写好发布说明（`## 安装` 之前的部分会显示在更新窗口里），再生成更新信息 `build/latest.json`，三个文件一起放进 GitHub Release。装好的 PixSnap 读最新 Release 里的 `latest.json` 来提示更新，所以每次发布都要带上它：

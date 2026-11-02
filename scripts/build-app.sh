@@ -18,6 +18,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/PixSnap" "$APP/Contents/MacOS/PixSnap"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
 # A stable signing identity keeps the Screen Recording permission across rebuilds.
 # Falls back to ad-hoc signing ("-"), which makes macOS ask for permission again after every build.

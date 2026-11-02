@@ -8,6 +8,10 @@
 	<string>PixSnap</string>
 	<key>CFBundleExecutable</key>
 	<string>PixSnap</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.pixsnap.PixSnap</string>
 	<key>CFBundleName</key>
