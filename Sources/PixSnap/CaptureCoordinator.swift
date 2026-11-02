@@ -471,8 +471,6 @@ final class CaptureCoordinator {
               let cropped = frozen.image.cropping(to: pixelRect) else { return }
 
         let capture = Capture(image: cropped, scale: scale)
-        if AppSettings.shared.copiesAfterCapture { ImageExporter.copyToPasteboard(capture) }
-        let entry = HistoryLibrary.shared.add(capture, sourceApp: sourceApp)
         // Pin it exactly where it was taken (pixel rect has a top-left origin; the screen a bottom-left one).
         let screenFrame = frozen.screen.frame
         let imageFrame = CGRect(
@@ -481,7 +479,33 @@ final class CaptureCoordinator {
             width: capture.pointSize.width,
             height: capture.pointSize.height
         )
-        pin(capture, at: imageFrame, on: frozen.screen, historyID: entry?.id)
+        guard AppSettings.shared.autoBeautify != AppSettings.autoBeautifyOff else {
+            return keepCapture(capture, at: imageFrame, on: frozen.screen, sourceApp: sourceApp)
+        }
+        // 截完自动美化: finished first, then kept and floated centered where it was taken.
+        Task {
+            guard let style = await BeautifyPresets.automaticStyle(for: capture, sourceApp: sourceApp?.localizedName),
+                  let finished = await Task.detached(priority: .userInitiated, operation: {
+                      Beautifier.render(capture.image, scale: capture.scale, style: style)
+                  }).value else {
+                return keepCapture(capture, at: imageFrame, on: frozen.screen, sourceApp: sourceApp)
+            }
+            let result = Capture(image: finished, scale: capture.scale)
+            let visible = frozen.screen.visibleFrame
+            let fit = min(1, (visible.height - 60) / result.pointSize.height, (visible.width - 40) / result.pointSize.width)
+            let size = CGSize(width: (result.pointSize.width * fit).rounded(), height: (result.pointSize.height * fit).rounded())
+            var frame = CGRect(x: imageFrame.midX - size.width / 2, y: imageFrame.midY - size.height / 2, width: size.width, height: size.height)
+            frame.origin.x = min(max(frame.minX, visible.minX + 10), visible.maxX - size.width - 10)
+            frame.origin.y = min(max(frame.minY, visible.minY + 50), visible.maxY - size.height - 10)
+            keepCapture(result, at: frame, on: frozen.screen, sourceApp: sourceApp)
+        }
+    }
+
+    /// Copied (if Settings says so), kept in history and floated at `frame`.
+    private func keepCapture(_ capture: Capture, at frame: CGRect, on screen: NSScreen, sourceApp: NSRunningApplication?) {
+        if AppSettings.shared.copiesAfterCapture { ImageExporter.copyToPasteboard(capture) }
+        let entry = HistoryLibrary.shared.add(capture, sourceApp: sourceApp)
+        pin(capture, at: frame, on: screen, historyID: entry?.id)
     }
 
     /// A finished image (美化, 翻译) floating over where its original is, and kept in history.

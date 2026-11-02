@@ -1,6 +1,7 @@
 import CoreGraphics
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import CoreText
 import Foundation
 import PixSnapCore
 
@@ -61,7 +62,14 @@ public enum Beautifier {
     public static func render(_ image: CGImage, scale: CGFloat, style: BeautifyStyle) -> CGImage? {
         let titleBar: CGFloat
         if case .window = style.frame { titleBar = (titleBarHeight * scale).rounded() } else { titleBar = 0 }
-        let cardSize = CGSize(width: CGFloat(image.width), height: CGFloat(image.height) + titleBar)
+        // A phone: a status bar above the screenshot, and a bezel all round.
+        var phoneDark: Bool?
+        if case let .phone(dark) = style.frame { phoneDark = dark }
+        let widthPoints = CGFloat(image.width) / scale
+        // An iPhone's status bar is 54 points on a 393-point-wide screen.
+        let statusBar = phoneDark == nil ? 0 : (widthPoints * 54 / 393 * scale).rounded()
+        let bezel = phoneDark == nil ? 0 : (max(8, min(widthPoints, CGFloat(image.height) / scale) * 0.035) * scale).rounded()
+        let cardSize = CGSize(width: CGFloat(image.width) + bezel * 2, height: CGFloat(image.height) + titleBar + statusBar + bezel * 2)
         let pad = (CGFloat(style.paddingPoints(width: Double(cardSize.width / scale), height: Double(cardSize.height / scale))) * scale).rounded()
         let width = Int(cardSize.width + pad * 2), height = Int(cardSize.height + pad * 2)
         let space = CGColorSpace(name: CGColorSpace.sRGB)!
@@ -70,7 +78,8 @@ public enum Beautifier {
         let canvas = CGRect(x: 0, y: 0, width: width, height: height)
         context.interpolationQuality = .high
 
-        switch style.background {
+        // With no room around it, there's no background either: the corners stay clear.
+        switch pad > 0 ? style.background : nil {
         case let .gradient(from, to):
             let colors = [cgColor(from, space), cgColor(to, space)] as CFArray
             if let gradient = CGGradient(colorsSpace: space, colors: colors, locations: nil) {
@@ -80,10 +89,15 @@ public enum Beautifier {
             if let backdrop = blurredBackdrop(of: image, size: canvas.size, scale: scale) {
                 context.draw(backdrop, in: canvas)
             }
+        case nil:
+            break
         }
 
         let card = CGRect(x: pad, y: pad, width: cardSize.width, height: cardSize.height)
-        let radius = min(CGFloat(style.cornerRadius) * scale, min(card.width, card.height) / 2)
+        let screen = card.insetBy(dx: bezel, dy: bezel)
+        let screenRadius = min(CGFloat(style.cornerRadius) * scale, min(screen.width, screen.height) / 2)
+        // The body's corners follow the screen's, a bezel further out.
+        let radius = screenRadius + bezel
         let shape = CGPath(roundedRect: card, cornerWidth: radius, cornerHeight: radius, transform: nil)
 
         if let shadow = shadow(style.shadow) {
@@ -94,6 +108,12 @@ public enum Beautifier {
             context.setFillColor(CGColor(colorSpace: space, components: [0, 0, 0, 1])!)
             context.fillPath()
             context.restoreGState()
+        }
+
+        if let dark = phoneDark {
+            drawPhone(image, card: card, screen: screen, radius: radius, screenRadius: screenRadius, statusBar: statusBar,
+                      dark: dark, scale: scale, context: context)
+            return context.makeImage()
         }
 
         context.saveGState()
@@ -117,6 +137,96 @@ public enum Beautifier {
             context.strokePath()
         }
         return context.makeImage()
+    }
+
+    /// An iPhone around `image`: the body (dark, or silver with a lighter rim), and on the screen a
+    /// status bar in the screenshot's top color with 9:41, the Dynamic Island, signal and battery.
+    private static func drawPhone(_ image: CGImage, card: CGRect, screen: CGRect, radius: CGFloat, screenRadius: CGFloat,
+                                  statusBar: CGFloat, dark: Bool, scale: CGFloat, context: CGContext) {
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        func color(_ white: CGFloat, _ alpha: CGFloat = 1) -> CGColor { CGColor(colorSpace: space, components: [white, white, white, alpha])! }
+
+        // The body, with a hairline rim like polished metal.
+        let body = CGPath(roundedRect: card, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        context.addPath(body)
+        context.setFillColor(dark ? color(0.1) : color(0.84))
+        context.fillPath()
+        context.addPath(CGPath(roundedRect: card.insetBy(dx: scale, dy: scale), cornerWidth: radius - scale, cornerHeight: radius - scale, transform: nil))
+        context.setStrokeColor(dark ? color(0.32) : color(0.97))
+        context.setLineWidth(1.5 * scale)
+        context.strokePath()
+        // A thin black band inside the body, as on the real thing.
+        let inner = screen.insetBy(dx: -2 * scale, dy: -2 * scale)
+        context.addPath(CGPath(roundedRect: inner, cornerWidth: screenRadius + 2 * scale, cornerHeight: screenRadius + 2 * scale, transform: nil))
+        context.setFillColor(color(0))
+        context.fillPath()
+
+        context.saveGState()
+        context.addPath(CGPath(roundedRect: screen, cornerWidth: screenRadius, cornerHeight: screenRadius, transform: nil))
+        context.clip()
+        let bar = CGRect(x: screen.minX, y: screen.maxY - statusBar, width: screen.width, height: statusBar)
+        let top = topColor(of: image)
+        context.setFillColor(CGColor(colorSpace: space, components: [top.red, top.green, top.blue, 1])!)
+        context.fill(bar)
+        context.draw(image, in: CGRect(x: screen.minX, y: screen.minY, width: CGFloat(image.width), height: CGFloat(image.height)))
+        drawStatusBar(in: bar, light: top.luminance > 0.55, scale: scale, context: context)
+        context.restoreGState()
+    }
+
+    /// The color across the screenshot's top edge, for the status bar above it.
+    private static func topColor(of image: CGImage) -> RGB {
+        var pixel = [UInt8](repeating: 255, count: 4)
+        guard let context = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let row = image.cropping(to: CGRect(x: 0, y: 0, width: image.width, height: min(4, image.height))) else { return RGB(1, 1, 1) }
+        context.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+        context.draw(row, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return RGB(Double(pixel[0]) / 255, Double(pixel[1]) / 255, Double(pixel[2]) / 255)
+    }
+
+    /// 9:41 on the left, the Dynamic Island in the middle, signal bars and the battery on the right.
+    private static func drawStatusBar(in bar: CGRect, light: Bool, scale: CGFloat, context: CGContext) {
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let ink = light ? CGColor(colorSpace: space, components: [0, 0, 0, 1])! : CGColor(colorSpace: space, components: [1, 1, 1, 1])!
+        // Laid out as on a 393-point-wide iPhone, whose status bar is 54 points tall.
+        let unit = bar.width / 393
+        let middle = bar.maxY - 28 * unit
+
+        // The island: a black pill.
+        let island = CGRect(x: bar.midX - 63 * unit, y: bar.maxY - 11 * unit - 37 * unit, width: 126 * unit, height: 37 * unit)
+        context.addPath(CGPath(roundedRect: island, cornerWidth: island.height / 2, cornerHeight: island.height / 2, transform: nil))
+        context.setFillColor(CGColor(colorSpace: space, components: [0, 0, 0, 1])!)
+        context.fillPath()
+
+        // 9:41
+        let font = CTFontCreateUIFontForLanguage(.emphasizedSystem, 17 * unit, nil)!
+        let text = CFAttributedStringCreate(nil, "9:41" as CFString, [kCTFontAttributeName: font, kCTForegroundColorAttributeName: ink] as CFDictionary)!
+        let line = CTLineCreateWithAttributedString(text)
+        let textWidth = CTLineGetTypographicBounds(line, nil, nil, nil)
+        // Centered in the space left of the island.
+        context.textPosition = CGPoint(x: bar.minX + (bar.width / 2 - 63 * unit) / 2 + 6 * unit - CGFloat(textWidth) / 2, y: middle - 6 * unit)
+        CTLineDraw(line, context)
+
+        // Signal: four rising bars; battery: an outline with a fill and a nub.
+        context.setFillColor(ink)
+        let right = bar.maxX - 30 * unit
+        let battery = CGRect(x: right - 25 * unit, y: middle - 6 * unit, width: 25 * unit, height: 12 * unit)
+        context.setStrokeColor(ink)
+        context.setLineWidth(unit)
+        context.addPath(CGPath(roundedRect: battery, cornerWidth: 3 * unit, cornerHeight: 3 * unit, transform: nil))
+        context.strokePath()
+        context.addPath(CGPath(roundedRect: battery.insetBy(dx: 2 * unit, dy: 2 * unit), cornerWidth: 1.5 * unit, cornerHeight: 1.5 * unit, transform: nil))
+        context.fillPath()
+        context.fill(CGRect(x: battery.maxX + unit, y: middle - 2 * unit, width: 1.5 * unit, height: 4 * unit))
+        for index in 0 ..< 4 {
+            let height = (4 + CGFloat(index) * 2.7) * unit
+            context.addPath(CGPath(roundedRect: CGRect(x: battery.minX - 28 * unit + CGFloat(index) * 5.5 * unit, y: middle - 6 * unit,
+                                                       width: 3.5 * unit, height: height),
+                                   cornerWidth: unit, cornerHeight: unit, transform: nil))
+        }
+        context.fillPath()
     }
 
     /// Blur, drop and opacity of each shadow.

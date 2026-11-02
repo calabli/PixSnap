@@ -17,7 +17,7 @@ public enum ContentKind: String, CaseIterable, Sendable {
 }
 
 /// A color with components from 0 to 1.
-public struct RGB: Equatable, Sendable {
+public struct RGB: Equatable, Codable, Sendable {
     public var red: Double
     public var green: Double
     public var blue: Double
@@ -162,24 +162,51 @@ public enum ContentClassifier {
 }
 
 /// The finish for a screenshot. Sizes are in points, scaled by the screenshot's pixels per point.
-public struct BeautifyStyle: Equatable, Sendable {
-    public enum Background: Equatable, Sendable {
+public struct BeautifyStyle: Equatable, Codable, Sendable {
+    public enum Background: Equatable, Codable, Sendable {
         /// Top-left to bottom-right.
         case gradient(RGB, RGB)
         /// The screenshot itself, enlarged and blurred, under it.
         case blurredImage
     }
 
-    public enum Shadow: Equatable, Sendable {
+    public enum Shadow: String, CaseIterable, Equatable, Codable, Sendable {
         case none, thin, soft, deep
+
+        public var title: String {
+            switch self {
+            case .none: "无"
+            case .thin: "浅"
+            case .soft: "柔和"
+            case .deep: "深"
+            }
+        }
     }
 
-    public enum Frame: Equatable, Sendable {
+    public enum Frame: Equatable, Codable, Sendable {
         case none
         /// A macOS window title bar with the red, yellow and green buttons.
         case window(dark: Bool)
         /// A hairline around the screenshot.
         case border
+        /// An iPhone: a status bar (9:41, signal, battery) above the screenshot, in a dark or
+        /// silver body with rounded corners.
+        case phone(dark: Bool)
+
+        /// The kinds to choose from, light or dark as `dark` says.
+        public static func choices(dark: Bool) -> [Frame] { [.none, .window(dark: dark), .border, .phone(dark: dark)] }
+
+        public var title: String {
+            switch self {
+            case .none: "无"
+            case .window: "窗口"
+            case .border: "细边框"
+            case .phone: "手机"
+            }
+        }
+
+        /// The same kind of frame, ignoring light or dark.
+        public func isKind(of other: Frame) -> Bool { title == other.title }
     }
 
     public var name: String
@@ -189,21 +216,29 @@ public struct BeautifyStyle: Equatable, Sendable {
     public var cornerRadius: Double
     public var shadow: Shadow
     public var frame: Frame
+    /// Room around the screenshot in points, set by hand; overrides `padding`.
+    public var fixedPadding: Double?
 
-    public init(name: String, background: Background, padding: Double, cornerRadius: Double, shadow: Shadow, frame: Frame) {
+    public init(name: String, background: Background, padding: Double, cornerRadius: Double, shadow: Shadow, frame: Frame,
+                fixedPadding: Double? = nil) {
         self.name = name
         self.background = background
         self.padding = padding
         self.cornerRadius = cornerRadius
         self.shadow = shadow
         self.frame = frame
+        self.fixedPadding = fixedPadding
     }
 
     public static let paddingRange: ClosedRange<Double> = 28 ... 110
+    /// What the 边距 and 圆角 sliders go between, in points.
+    public static let manualPaddingRange: ClosedRange<Double> = 0 ... 160
+    public static let cornerRadiusRange: ClosedRange<Double> = 0 ... 48
 
     /// The room around a screenshot `width` × `height` points.
     public func paddingPoints(width: Double, height: Double) -> Double {
-        min(max(min(width, height) * padding, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
+        if let fixedPadding { return min(max(fixedPadding, Self.manualPaddingRange.lowerBound), Self.manualPaddingRange.upperBound) }
+        return min(max(min(width, height) * padding, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
     }
 
     /// The style that suits `kind`, colored from the screenshot.
@@ -215,8 +250,10 @@ public struct BeautifyStyle: Equatable, Sendable {
             return BeautifyStyle(name: "代码", background: vivid(hue: hue, dark: dark), padding: 0.12, cornerRadius: 12,
                                  shadow: .deep, frame: .window(dark: dark))
         case .chat:
-            return BeautifyStyle(name: "聊天", background: pastel(hue: hue, dark: dark), padding: 0.1, cornerRadius: 18,
-                                 shadow: .soft, frame: .none)
+            // A phone-shaped (tall) chat goes in a phone; a wide one, from a desktop app, doesn't.
+            let tall = signals.aspectRatio < 0.8
+            return BeautifyStyle(name: "聊天", background: pastel(hue: hue, dark: dark), padding: 0.1, cornerRadius: tall ? 36 : 18,
+                                 shadow: .soft, frame: tall ? .phone(dark: dark) : .none)
         case .document:
             return BeautifyStyle(name: "文档", background: paper(hue: hue, dark: dark), padding: 0.07, cornerRadius: 6,
                                  shadow: .thin, frame: .none)

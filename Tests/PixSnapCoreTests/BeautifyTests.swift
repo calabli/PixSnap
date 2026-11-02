@@ -69,4 +69,30 @@ final class BeautifyTests: XCTestCase {
         XCTAssertEqual(style.paddingPoints(width: 5000, height: 4000), BeautifyStyle.paddingRange.upperBound)
         XCTAssertEqual(style.paddingPoints(width: 800, height: 500), 50, accuracy: 0.001)
     }
+
+    func testFixedPaddingOverridesShareAndStaysInRange() {
+        var style = BeautifyStyle(name: "x", background: .blurredImage, padding: 0.1, cornerRadius: 12, shadow: .soft, frame: .none)
+        XCTAssertEqual(style.paddingPoints(width: 600, height: 400), 40)
+        style.fixedPadding = 0
+        XCTAssertEqual(style.paddingPoints(width: 600, height: 400), 0)
+        style.fixedPadding = 500
+        XCTAssertEqual(style.paddingPoints(width: 600, height: 400), BeautifyStyle.manualPaddingRange.upperBound)
+    }
+
+    func testTallChatsGoInAPhone() {
+        var tall = signals(brightness: 0.9)
+        tall.aspectRatio = 0.5
+        XCTAssertEqual(BeautifyStyle.recommended(for: .chat, tall).frame, .phone(dark: false))
+        var wide = signals(brightness: 0.9)
+        wide.aspectRatio = 1.6
+        XCTAssertEqual(BeautifyStyle.recommended(for: .chat, wide).frame, BeautifyStyle.Frame.none)
+    }
+
+    func testStylesRoundTripThroughJSON() throws {
+        let style = BeautifyStyle(name: "我的", background: .gradient(RGB(1, 0.5, 0), RGB(0, 0, 1)), padding: 0.1, cornerRadius: 20,
+                                  shadow: .deep, frame: .phone(dark: true), fixedPadding: 64)
+        let decoded = try JSONDecoder().decode(BeautifyStyle.self, from: JSONEncoder().encode(style))
+        XCTAssertEqual(decoded, style)
+    }
 }
+

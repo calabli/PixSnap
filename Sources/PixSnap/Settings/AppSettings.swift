@@ -116,6 +116,14 @@ final class AppSettings {
         didSet { defaults.set(checksForUpdates, forKey: Keys.checksForUpdates) }
     }
 
+    /// "截完自动美化": off, the style that suits each screenshot, or a saved preset's id.
+    var autoBeautify: String {
+        didSet { defaults.set(autoBeautify, forKey: Keys.autoBeautify) }
+    }
+
+    static let autoBeautifyOff = "off"
+    static let autoBeautifySmart = "smart"
+
     /// How the clothesline ropes look.
     var ropeStyle: RopeStyle {
         didSet { if let data = try? JSONEncoder().encode(ropeStyle) { defaults.set(data, forKey: Keys.ropeStyle) } }
@@ -151,6 +159,7 @@ final class AppSettings {
         static let ropeStyle = "ropeStyle"
         static let notchHandleSize = "notchHandleSize"
         static let checksForUpdates = "checksForUpdates"
+        static let autoBeautify = "autoBeautify"
         static let hidesNotchHandle = "hidesNotchHandle"
     }
 
@@ -188,6 +197,7 @@ final class AppSettings {
         notchHandleSize = defaults.string(forKey: Keys.notchHandleSize).flatMap(NotchHandleSize.init(rawValue:)) ?? .medium
         hidesNotchHandle = defaults.bool(forKey: Keys.hidesNotchHandle)
         checksForUpdates = defaults.object(forKey: Keys.checksForUpdates) as? Bool ?? true
+        autoBeautify = defaults.string(forKey: Keys.autoBeautify) ?? Self.autoBeautifyOff
         ropeStyle = defaults.data(forKey: Keys.ropeStyle)
             .flatMap { try? JSONDecoder().decode(RopeStyle.self, from: $0) } ?? .default
         launchAtLoginStatus = SMAppService.mainApp.status

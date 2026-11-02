@@ -101,6 +101,12 @@ struct SettingsView: View {
 
             Section("截图") {
                 Toggle("截图后自动复制到剪贴板", isOn: $settings.copiesAfterCapture)
+                Picker("截完自动美化", selection: $settings.autoBeautify) {
+                    Text("关闭").tag(AppSettings.autoBeautifyOff)
+                    Text("智能推荐").tag(AppSettings.autoBeautifySmart)
+                    ForEach(BeautifyPresets.all) { preset in Text(preset.style.name).tag(preset.id.uuidString) }
+                }
+                .help("框选截图后直接加上背景、圆角和阴影：按截图内容自动选样式，或者用你在美化里存的方案。窗口截图和长截图不受影响")
                 Picker("延时截图倒计时", selection: $settings.captureDelay) {
                     ForEach(AppSettings.captureDelayChoices, id: \.self) { Text("\($0) 秒").tag($0) }
                 }
