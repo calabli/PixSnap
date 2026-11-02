@@ -228,6 +228,18 @@ struct SettingsView: View {
                     Text(loginError).font(.callout).foregroundStyle(.red)
                 }
             }
+
+            Section("更新") {
+                Toggle("自动检查更新", isOn: $settings.checksForUpdates)
+                    .help("启动后和每天检查一次 GitHub 上有没有新版本，有的话告诉你更新了什么")
+                    .onChange(of: settings.checksForUpdates) { Updater.shared.start() }
+                LabeledContent("当前版本") {
+                    HStack {
+                        Text(Updater.shared.currentVersion)
+                        Button("检查更新") { Updater.shared.check(userInitiated: true) }
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         // Taller than most screens now, so it scrolls.

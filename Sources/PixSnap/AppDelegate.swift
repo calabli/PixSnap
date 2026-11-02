@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { HistoryLibrary.shared.recognizeMissingText() }
         notch.rebuild()
         settingsWindow.onNotchSettingChange = { [weak self] in self?.notch.rebuild() }
+        Updater.shared.start()
 
         captureShortcut.onChange = { [weak self] in self?.refreshCaptureMenuItems() }
         let taken = captureShortcut.start()
@@ -47,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             coordinator.pinImage(at: URL(fileURLWithPath: arguments[flag + 1]), pinned: arguments.contains("--pinned"))
         }
         if arguments.contains("--settings") { settingsWindow.show() }
+        if arguments.contains("--check-update") { Updater.shared.check(userInitiated: true) }
         // `--beautify-samples <image> <folder>`: 美化's guess for the image, and every style written to the folder.
         if let flag = arguments.firstIndex(of: "--beautify-samples"), arguments.indices.contains(flag + 2) {
             coordinator.writeBeautifySamples(imageAt: URL(fileURLWithPath: arguments[flag + 1]),
@@ -133,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ","))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "关于 PixSnap", action: #selector(showAbout), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "退出 PixSnap", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         for menuItem in menu.items where menuItem.action != #selector(NSApplication.terminate(_:)) {
             menuItem.target = self
@@ -240,6 +243,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showSettings() {
         settingsWindow.show()
+    }
+
+    @objc private func checkForUpdates() {
+        Updater.shared.check(userInitiated: true)
     }
 
     @objc private func showAbout() {

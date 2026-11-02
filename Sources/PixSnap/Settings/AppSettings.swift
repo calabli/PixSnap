@@ -111,6 +111,11 @@ final class AppSettings {
         didSet { defaults.set(hidesNotchHandle, forKey: Keys.hidesNotchHandle) }
     }
 
+    /// Whether PixSnap looks for a newer version after launch and once a day (on by default).
+    var checksForUpdates: Bool {
+        didSet { defaults.set(checksForUpdates, forKey: Keys.checksForUpdates) }
+    }
+
     /// How the clothesline ropes look.
     var ropeStyle: RopeStyle {
         didSet { if let data = try? JSONEncoder().encode(ropeStyle) { defaults.set(data, forKey: Keys.ropeStyle) } }
@@ -145,6 +150,7 @@ final class AppSettings {
         static let pullsHistoryFromNotch = "pullsHistoryFromNotch"
         static let ropeStyle = "ropeStyle"
         static let notchHandleSize = "notchHandleSize"
+        static let checksForUpdates = "checksForUpdates"
         static let hidesNotchHandle = "hidesNotchHandle"
     }
 
@@ -181,6 +187,7 @@ final class AppSettings {
         pullsHistoryFromNotch = defaults.object(forKey: Keys.pullsHistoryFromNotch) as? Bool ?? true
         notchHandleSize = defaults.string(forKey: Keys.notchHandleSize).flatMap(NotchHandleSize.init(rawValue:)) ?? .medium
         hidesNotchHandle = defaults.bool(forKey: Keys.hidesNotchHandle)
+        checksForUpdates = defaults.object(forKey: Keys.checksForUpdates) as? Bool ?? true
         ropeStyle = defaults.data(forKey: Keys.ropeStyle)
             .flatMap { try? JSONDecoder().decode(RopeStyle.self, from: $0) } ?? .default
         launchAtLoginStatus = SMAppService.mainApp.status
