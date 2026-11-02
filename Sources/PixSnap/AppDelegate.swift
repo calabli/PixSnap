@@ -135,6 +135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let clothesline = NSMenuItem(title: CaptureAction.clothesline.title, action: #selector(openClothesline), keyEquivalent: "")
         menu.addItem(clothesline)
         captureMenuItems[.clothesline] = clothesline
+        let filmStrip = NSMenuItem(title: CaptureAction.filmStrip.title, action: #selector(openFilmStrip), keyEquivalent: "")
+        menu.addItem(filmStrip)
+        captureMenuItems[.filmStrip] = filmStrip
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "打开截图文件夹", action: #selector(openSaveFolder), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(showSettings), keyEquivalent: ","))
@@ -180,6 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .window: coordinator.startWindowCapture()
         case .recording: coordinator.toggleRecording()
         case .clothesline: notch.toggleOnScreenUnderMouse()
+        case .filmStrip: FilmStripWindow.toggle { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) }
         }
     }
 
@@ -223,6 +227,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             menu.addItem(item)
         }
+    }
+
+    @objc private func openFilmStrip() {
+        // After the menu closes, or its click would count as one outside the strip.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.start(.filmStrip) }
     }
 
     @objc private func openClothesline() {

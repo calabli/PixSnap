@@ -9,6 +9,8 @@ final class CaptureActionTests: XCTestCase {
         XCTAssertEqual(CaptureAction.window.defaultShortcut.displayString, "⌥⇧4")
         XCTAssertEqual(CaptureAction.clothesline.defaultShortcut.displayString, "⌥⇧H")
         XCTAssertFalse(CaptureAction.captureModes.contains(.clothesline))
+        XCTAssertFalse(CaptureAction.captureModes.contains(.filmStrip))
+        XCTAssertEqual(CaptureAction.filmStrip.defaultShortcut.displayString, "⌥⇧T")
     }
 
     func testWindowStyleFallsBackFieldByField() throws {

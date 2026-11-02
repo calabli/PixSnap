@@ -16,9 +16,11 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
     case recording
     /// Not a capture: opens the clothesline (or puts it away), without going to the notch.
     case clothesline
+    /// Not a capture: 时光胶片, all of history on a strip of film (or puts it away).
+    case filmStrip
 
     /// The ones that take a screenshot or recording.
-    public static var captureModes: [CaptureAction] { allCases.filter { $0 != .clothesline } }
+    public static var captureModes: [CaptureAction] { allCases.filter { $0 != .clothesline && $0 != .filmStrip } }
 
     public var title: String {
         switch self {
@@ -29,11 +31,13 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
         case .window: "截取窗口"
         case .recording: "录屏"
         case .clothesline: "打开晾衣架"
+        case .filmStrip: "时光胶片"
         }
     }
 
     /// ⌘⇧2 for the everyday one; the others on ⌥⇧ and a number, away from the system's ⌘⇧3/4/5.
-    /// 18–21 and 23 are the "1"–"5" keys on macOS; the clothesline is ⌥⇧H, for history (4 is "H").
+    /// 18–21 and 23 are the "1"–"5" keys on macOS; the clothesline is ⌥⇧H, for history (4 is "H"),
+    /// and 时光胶片 ⌥⇧T, for time (17 is "T").
     public var defaultShortcut: Shortcut {
         switch self {
         case .region: .defaultCapture
@@ -43,6 +47,7 @@ public enum CaptureAction: String, Codable, CaseIterable, Sendable {
         case .window: Shortcut(keyCode: 21, modifiers: [.option, .shift], keyLabel: "4")
         case .recording: Shortcut(keyCode: 23, modifiers: [.option, .shift], keyLabel: "5")
         case .clothesline: Shortcut(keyCode: 4, modifiers: [.option, .shift], keyLabel: "H")
+        case .filmStrip: Shortcut(keyCode: 17, modifiers: [.option, .shift], keyLabel: "T")
         }
     }
 }
