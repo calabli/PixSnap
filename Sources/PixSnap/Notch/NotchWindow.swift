@@ -18,6 +18,7 @@ import PixSnapCore
 @MainActor
 final class NotchWindow: NSPanel {
     var onPick: ((HistoryEntry) -> Void)?
+    var onTranslate: ((HistoryEntry) -> Void)?
     /// Supplies the days to hang each time the lines are about to come down.
     var loadDays: ((String) -> Lines)?
     /// The handle stays invisible until the mouse is over it.
@@ -165,6 +166,8 @@ final class NotchWindow: NSPanel {
             throwAwayFromKeyboard()
         case 11: // B
             if let entry = preview.entry ?? clothesline.hoveredEntry { bigBang(entry) }
+        case 17: // T
+            if let entry = preview.entry ?? clothesline.hoveredEntry { translate(entry) }
         case 3: // F
             if let entry = preview.entry ?? clothesline.hoveredEntry { toggleFavorite(entry) }
         case 49: // space
@@ -636,6 +639,7 @@ final class NotchWindow: NSPanel {
         add("浮动到屏幕上", "macwindow.on.rectangle", key: "\r", #selector(floatFromMenu(_:)))
         add("复制文字", "text.viewfinder", key: "", #selector(copyTextFromMenu(_:)))
         add("大爆炸", "sparkles", key: "b", #selector(bigBangFromMenu(_:)))
+        add("翻译", "translate", key: "t", #selector(translateFromMenu(_:)), enabled: !entry.isRecording)
         menu.addItem(.separator())
         add(favorite ? "已收藏，不能扔" : "扔进洗衣篮", "basket", key: "\u{8}", #selector(throwFromMenu(_:)), enabled: !favorite)
         add("永久删除…", "trash", key: "", #selector(deleteFromMenu(_:)))
@@ -655,6 +659,19 @@ final class NotchWindow: NSPanel {
     @objc private func bigBangFromMenu(_ item: NSMenuItem) {
         guard let entry = item.representedObject as? HistoryEntry else { return }
         bigBang(entry)
+    }
+
+    @objc private func translateFromMenu(_ item: NSMenuItem) {
+        guard let entry = item.representedObject as? HistoryEntry else { return }
+        translate(entry)
+    }
+
+    /// 截图翻译 on a capture on the line (or in the preview). Its window sits below the lines, so
+    /// they go up first; a recording has no text to put back.
+    private func translate(_ entry: HistoryEntry) {
+        guard !entry.isRecording else { return NSSound.beep() }
+        collapse()
+        onTranslate?(entry)
     }
 
     /// 大爆炸 on a capture on the line (or in the preview), bursting from where it's shown.

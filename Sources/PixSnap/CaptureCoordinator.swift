@@ -97,6 +97,24 @@ final class CaptureCoordinator {
         pin(capture, at: ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame), on: screen, historyID: entry.id)
     }
 
+    /// 截图翻译 on a capture from history (the clothesline, its preview, the film strip): the
+    /// original stays in history, and a kept translation goes in as a new capture.
+    func translateHistoryEntry(_ entry: HistoryEntry) {
+        let mouse = NSEvent.mouseLocation
+        guard !entry.isRecording, let capture = HistoryLibrary.shared.loadCapture(entry),
+              let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main
+        else { return }
+        let frame = ScreenGeometry.centered(capture.pointSize, in: screen.visibleFrame)
+        TranslateWindow.show(capture, near: frame, on: screen) { [weak self] finished in
+            guard let self else { return }
+            let kept = HistoryLibrary.shared.add(finished, sourceApp: nil)
+            let visible = screen.visibleFrame
+            let fit = min(1, (visible.height - 60) / finished.pointSize.height, (visible.width - 40) / finished.pointSize.width)
+            let size = CGSize(width: (finished.pointSize.width * fit).rounded(), height: (finished.pointSize.height * fit).rounded())
+            pin(finished, at: ScreenGeometry.centered(size, in: visible), on: screen, historyID: kept?.id)
+        }
+    }
+
     /// Floats an image file in the middle of the screen under the cursor, optionally pinned (no bar).
     func pinImage(at url: URL, pinned: Bool = false) {
         let mouse = NSEvent.mouseLocation

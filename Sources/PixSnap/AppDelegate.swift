@@ -12,7 +12,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var benchmark: CaptureBenchmark?
     /// The menu items for each capture mode, to show their shortcuts.
     private var captureMenuItems: [CaptureAction: NSMenuItem] = [:]
-    private lazy var notch = NotchController { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) }
+    private lazy var notch = NotchController(
+        onPick: { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) },
+        onTranslate: { [weak self] entry in self?.coordinator.translateHistoryEntry(entry) }
+    )
     private let notchConflicts = NotchConflictGuide()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -52,6 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if arguments.contains("--settings") { settingsWindow.show() }
         if arguments.contains("--check-update") { Updater.shared.check(userInitiated: true) }
+        // `--translate-newest`: 截图翻译 on the newest capture in history, as its menus do.
+        if arguments.contains("--translate-newest"), let newest = HistoryLibrary.shared.recent(limit: 1).first {
+            coordinator.translateHistoryEntry(newest)
+        }
         // `--beautify-samples <image> <folder>`: 美化's guess for the image, and every style written to the folder.
         if let flag = arguments.firstIndex(of: "--beautify-samples"), arguments.indices.contains(flag + 2) {
             coordinator.writeBeautifySamples(imageAt: URL(fileURLWithPath: arguments[flag + 1]),
@@ -183,7 +190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .window: coordinator.startWindowCapture()
         case .recording: coordinator.toggleRecording()
         case .clothesline: notch.toggleOnScreenUnderMouse()
-        case .filmStrip: FilmStripWindow.toggle { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) }
+        case .filmStrip:
+            FilmStripWindow.toggle(onPick: { [weak self] entry in self?.coordinator.pinHistoryEntry(entry) },
+                                   onTranslate: { [weak self] entry in self?.coordinator.translateHistoryEntry(entry) })
         }
     }
 

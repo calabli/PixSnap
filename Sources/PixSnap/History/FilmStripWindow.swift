@@ -5,15 +5,16 @@ import PixSnapCore
 /// and newest at the right (where it opens), each day starting with its date printed on the film
 /// edge. Scroll sideways (or with the wheel) to go back in time; type to keep only captures with
 /// those words. Click a frame to float it, drag it into another app, space to preview it (← → step,
-/// Return floats), right-click for more. Esc, a click outside or the shortcut again puts it away.
+/// Return floats, T translates), right-click for more. Esc, a click outside or the shortcut again puts it away.
 @MainActor
 final class FilmStripWindow: NSPanel, NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout, NSSearchFieldDelegate {
     var onPick: ((HistoryEntry) -> Void)?
+    var onTranslate: ((HistoryEntry) -> Void)?
 
     private static var shown: FilmStripWindow?
 
     /// Opens the strip on the screen under the cursor, or puts it away if it's out.
-    static func toggle(onPick: @escaping (HistoryEntry) -> Void) {
+    static func toggle(onPick: @escaping (HistoryEntry) -> Void, onTranslate: @escaping (HistoryEntry) -> Void) {
         if let shown {
             shown.dismiss()
             return
@@ -22,6 +23,7 @@ final class FilmStripWindow: NSPanel, NSCollectionViewDataSource, NSCollectionVi
         guard let screen = NSScreen.screens.first(where: { ScreenGeometry.screen($0.frame, containsMouse: mouse) }) ?? NSScreen.main else { return }
         let window = FilmStripWindow(screen: screen)
         window.onPick = onPick
+        window.onTranslate = onTranslate
         shown = window
         window.present()
     }
@@ -232,6 +234,13 @@ final class FilmStripWindow: NSPanel, NSCollectionViewDataSource, NSCollectionVi
         onPick?(entry)
     }
 
+    /// Its window sits behind the strip's preview, so the strip goes first.
+    private func translate(_ entry: HistoryEntry) {
+        guard !entry.isRecording else { return NSSound.beep() }
+        dismiss()
+        onTranslate?(entry)
+    }
+
     fileprivate func dragOut(_ entry: HistoryEntry, from view: NSView, frame: CGRect, image: NSImage, event: NSEvent) {
         if entry.isRecording {
             guard let video = HistoryLibrary.shared.videoURL(for: entry) else { return }
@@ -255,6 +264,7 @@ final class FilmStripWindow: NSPanel, NSCollectionViewDataSource, NSCollectionVi
             add("复制图片", "doc.on.doc") {
                 if let capture = HistoryLibrary.shared.loadCapture(entry) { ImageExporter.copyToPasteboard(capture) }
             }
+            add("翻译", "translate") { [weak self] in self?.translate(entry) }
         }
         return menu
     }
@@ -303,6 +313,8 @@ final class FilmStripWindow: NSPanel, NSCollectionViewDataSource, NSCollectionVi
             }
         case 36, 76: // Return
             if let entry = preview.entry { pick(entry) }
+        case 17 where preview.entry != nil: // T, while previewing; otherwise it's typing
+            if let entry = preview.entry { translate(entry) }
         default:
             // Typing goes to the search box.
             if let characters = event.characters, !characters.isEmpty, event.modifierFlags.intersection([.command, .control]).isEmpty,

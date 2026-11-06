@@ -6,11 +6,13 @@ import PixSnapCore
 @MainActor
 final class NotchController {
     private let onPick: (HistoryEntry) -> Void
+    private let onTranslate: (HistoryEntry) -> Void
     private var windows: [NotchWindow] = []
     private var screenObserver: NSObjectProtocol?
 
-    init(onPick: @escaping (HistoryEntry) -> Void) {
+    init(onPick: @escaping (HistoryEntry) -> Void, onTranslate: @escaping (HistoryEntry) -> Void) {
         self.onPick = onPick
+        self.onTranslate = onTranslate
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -41,6 +43,7 @@ final class NotchController {
             window.hidesHandle = settings.hidesNotchHandle
             window.loadDays = { Self.days(matching: $0) }
             window.onPick = { [weak self] entry in self?.onPick(entry) }
+            window.onTranslate = { [weak self] entry in self?.onTranslate(entry) }
             window.orderFrontRegardless()
             windows.append(window)
         }
@@ -74,6 +77,7 @@ final class NotchController {
                                      screenFrame: screen.frame, menuBarHeight: Self.menuBarHeight(on: screen))
             window.loadDays = { Self.days(matching: $0) }
             window.onPick = { [weak self] entry in self?.onPick(entry) }
+            window.onTranslate = { [weak self] entry in self?.onTranslate(entry) }
             window.orderFrontRegardless()
             windows.append(window)
             window.openNow()
