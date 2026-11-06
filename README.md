@@ -34,11 +34,39 @@ scripts/package-pkg.sh
 
 现在用开发证书签名、没有公证，别的 Mac 第一次打开会被拦下：在“系统设置 › 隐私与安全性”底部点“仍要打开”。
 
-发布新版本：先改 `Resources/Info.plist` 里的版本号，打好 pkg 和 dmg，写好发布说明（`## 安装` 之前的部分会显示在更新窗口里），再生成更新信息 `build/latest.json`，三个文件一起放进 GitHub Release。装好的 PixSnap 读最新 Release 里的 `latest.json` 来提示更新，所以每次发布都要带上它：
+## 持续集成和发布
+
+每次推送到 main 和每个拉取请求，GitHub Actions 都会编译并跑测试（`.github/workflows/check.yml`）。
+
+发布新版本只要三步，推送标签后 `.github/workflows/release.yml` 会测试、打包，并发布 pkg、dmg 和 `latest.json`（装好的 PixSnap 读它来提示更新）：
+
+1. 改 `Resources/Info.plist` 里的版本号。
+2. 写 `ReleaseNotes/<版本>.md`，只写这次的新功能（`## 标题` 加条目），安装说明和 SHA-256 由 `scripts/compose-release-notes.sh` 自动补上。
+3. 提交，然后打标签并推送：
 
 ```bash
-scripts/make-update-info.sh 发布说明.md
+git tag v0.7.0
 ```
+
+```bash
+git push origin main v0.7.0
+```
+
+标签必须和 Info.plist 里的版本一致，发布说明也要在，否则发布会停下来。
+
+发布需要仓库里有签名证书，只需设置一次。没有证书时不会发布：临时签名的版本在 macOS 看来每次都是新应用，用户每次更新都要重新授权屏幕录制。在“钥匙串访问”里把 “Apple Development” 证书连同私钥导出成 `.p12` 并设一个密码，然后：
+
+```bash
+base64 -i 证书.p12 | gh secret set MACOS_CERT_P12
+```
+
+```bash
+gh secret set MACOS_CERT_PASSWORD
+```
+
+设好后删掉导出的 `.p12`。证书到期（开发证书一年）后要换一份。
+
+也可以在本机手动发布：打好 pkg 和 dmg 后运行 `scripts/compose-release-notes.sh <版本> build/release-notes.md` 和 `scripts/make-update-info.sh build/release-notes.md`，把三个文件放进 GitHub Release。
 
 ## 首次使用
 

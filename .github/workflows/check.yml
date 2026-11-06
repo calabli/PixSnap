@@ -1,0 +1,27 @@
+# Every push to main and every pull request: does it build, and do the tests pass?
+name: 检查
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 工具版本
+        run: swift --version
+      - name: 编译
+        run: swift build
+      - name: 测试
+        run: swift test

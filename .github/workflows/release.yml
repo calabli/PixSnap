@@ -1,0 +1,102 @@
+# Pushing a tag like v0.7.0 tests, builds and publishes that release: the .pkg, the .dmg and
+# latest.json, which installed copies read to offer the update.
+#
+# Before tagging: set the version in Resources/Info.plist and write ReleaseNotes/<version>.md.
+# Needs two repository secrets, the certificate the app is signed with (see README):
+#   MACOS_CERT_P12       the .p12, base64-encoded
+#   MACOS_CERT_PASSWORD  its password
+# Without them it stops rather than publish an ad-hoc signed app: macOS would treat each one as
+# a new app, and everyone would lose the screen recording permission on every update.
+name: 发布
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 核对版本
+        run: |
+          VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' Resources/Info.plist)"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::标签是 $TAG，但 Info.plist 里的版本是 $VERSION"
+            exit 1
+          fi
+          if [ ! -f "ReleaseNotes/$VERSION.md" ]; then
+            echo "::error::没有发布说明 ReleaseNotes/$VERSION.md"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: 测试
+        run: swift test
+
+      - name: 导入签名证书
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERT_P12" ] || [ -z "$MACOS_CERT_PASSWORD" ]; then
+            echo "::error::缺少 MACOS_CERT_P12 或 MACOS_CERT_PASSWORD，不发布临时签名的版本（用户每次更新都要重新授权屏幕录制）"
+            exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          IDENTITY="$(security find-identity -p codesigning "$KEYCHAIN" | awk '/\) [0-9A-F]{40} / {print $2; exit}')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::证书里没有可用来签名的身份"
+            exit 1
+          fi
+          echo "PIXSNAP_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: 打包
+        run: |
+          scripts/package-dmg.sh
+          scripts/package-pkg.sh
+
+      - name: 确认签名
+        run: |
+          codesign --verify --deep --strict build/PixSnap.app
+          if ! codesign -dvv build/PixSnap.app 2>&1 | grep -q '^Authority='; then
+            echo "::error::PixSnap.app 没有用证书签名"
+            exit 1
+          fi
+
+      - name: 生成发布说明和更新信息
+        run: |
+          scripts/compose-release-notes.sh "$VERSION" build/release-notes.md
+          scripts/make-update-info.sh build/release-notes.md
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" "build/PixSnap-$VERSION.pkg" "build/PixSnap-$VERSION.dmg" build/latest.json \
+            --title "PixSnap $VERSION" --notes-file build/release-notes.md --verify-tag
+
+      - name: 清理钥匙串
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
