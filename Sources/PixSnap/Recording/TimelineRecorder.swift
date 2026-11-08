@@ -72,6 +72,7 @@ final class TimelineRecorder {
                                          app: NSWorkspace.shared.frontmostApplication?.localizedName))
             timeline.moves.append(.init(t: t, x: x, y: y))
         case .keyDown:
+            if !event.isARepeat { timeline.typing.append(t) }
             let flags = event.modifierFlags
             var modifiers: ShortcutModifiers = []
             if flags.contains(.control) { modifiers.insert(.control) }

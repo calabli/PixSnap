@@ -59,9 +59,38 @@ enum StudioMedia {
         return composition
     }
 
+    /// 去掉键盘声: the microphone's track (the mono one; the Mac's sound is stereo) turned down
+    /// around each key press in `typing` (times on `asset`). Nil when there's nothing to do.
+    static func keyNoiseMix(for asset: AVAsset, typing: [Double]) async -> AVAudioMix? {
+        guard !typing.isEmpty, let tracks = try? await asset.loadTracks(withMediaType: .audio) else { return nil }
+        let duration = (try? await asset.load(.duration).seconds) ?? 0
+        let ranges = KeyNoise.quietRanges(typing: typing, duration: duration)
+        var parameters: [AVAudioMixInputParameters] = []
+        for track in tracks {
+            let formats = (try? await track.load(.formatDescriptions)) ?? []
+            let channels = formats.compactMap { CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee.mChannelsPerFrame }.max() ?? 0
+            guard channels == 1 else { continue }
+            let input = AVMutableAudioMixInputParameters(track: track)
+            func time(_ seconds: Double) -> CMTime { CMTime(seconds: max(0, seconds), preferredTimescale: 48000) }
+            let ramp = KeyNoise.ramp, level = Float(KeyNoise.level)
+            for range in ranges where range.upperBound - range.lowerBound > ramp * 2 {
+                input.setVolumeRamp(fromStartVolume: 1, toEndVolume: level,
+                                    timeRange: CMTimeRange(start: time(range.lowerBound), duration: time(ramp)))
+                input.setVolume(level, at: time(range.lowerBound + ramp))
+                input.setVolumeRamp(fromStartVolume: level, toEndVolume: 1,
+                                    timeRange: CMTimeRange(start: time(range.upperBound - ramp), duration: time(ramp)))
+            }
+            parameters.append(input)
+        }
+        guard !parameters.isEmpty else { return nil }
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = parameters
+        return mix
+    }
+
     /// Writes `asset` with `composition` as an H.264 MP4 at `bitRate`, its sound mixed into one
     /// AAC track. `progress` gets 0…1 as it goes.
-    static func write(_ asset: AVAsset, composition: AVVideoComposition, bitRate: Double, to url: URL,
+    static func write(_ asset: AVAsset, composition: AVVideoComposition, audioMix: AVAudioMix? = nil, bitRate: Double, to url: URL,
                       progress: @escaping @Sendable (Double) -> Void) async throws {
         let duration = try await asset.load(.duration).seconds
         let pictures = try await asset.loadTracks(withMediaType: .video)
@@ -98,6 +127,7 @@ enum StudioMedia {
                 AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48000, AVNumberOfChannelsKey: 2,
                 AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false,
             ])
+            soundOut.audioMix = audioMix
             reader.add(soundOut)
             let soundIn = AVAssetWriterInput(mediaType: .audio, outputSettings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48000, AVNumberOfChannelsKey: 2,

@@ -66,10 +66,27 @@ public struct RecordingTimeline: Codable, Equatable, Sendable {
     public var keys: [Key] = []
     /// Steps marked by hand, as times.
     public var marks: [Double] = []
+    /// When any key went down, typing included — only the time, never which key — so the clatter
+    /// can be taken out of the microphone.
+    public var typing: [Double] = []
 
     public init(width: Double, height: Double) {
         self.width = width
         self.height = height
+    }
+
+    private enum CodingKeys: String, CodingKey { case width, height, moves, clicks, keys, marks, typing }
+
+    /// Timelines from before a field existed read it as empty.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        width = try container.decode(Double.self, forKey: .width)
+        height = try container.decode(Double.self, forKey: .height)
+        moves = try container.decodeIfPresent([Point].self, forKey: .moves) ?? []
+        clicks = try container.decodeIfPresent([Click].self, forKey: .clicks) ?? []
+        keys = try container.decodeIfPresent([Key].self, forKey: .keys) ?? []
+        marks = try container.decodeIfPresent([Double].self, forKey: .marks) ?? []
+        typing = try container.decodeIfPresent([Double].self, forKey: .typing) ?? []
     }
 
     /// Where the pointer was at `t`, between the samples either side; nil before the first.
@@ -100,6 +117,7 @@ public struct RecordingTimeline: Codable, Equatable, Sendable {
         }
         cut.keys = keys.filter { $0.t >= start && $0.t <= end }.map { Key(t: $0.t - start, label: $0.label) }
         cut.marks = marks.filter { $0 >= start && $0 <= end }.map { $0 - start }
+        cut.typing = typing.filter { $0 >= start && $0 <= end }.map { $0 - start }
         return cut
     }
 }

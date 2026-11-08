@@ -77,6 +77,9 @@ final class StudioWindow: NSWindow {
     private let overlay = MosaicOverlayView()
     private let mosaicButton = NSButton(title: "添加打码框", target: nil, action: nil)
     private let mosaicInfo = NSTextField(wrappingLabelWithString: "")
+    private let keyNoiseBox = NSButton(checkboxWithTitle: "去掉键盘声", target: nil, action: nil)
+    private static let keyNoiseKey = "studioRemovesKeyNoise"
+    private var removesKeyNoise: Bool { keyNoiseBox.state == .on && keyNoiseBox.isEnabled }
     /// The zoom plan playing now (on the edited time), for placing the boxes.
     private var currentPlan = ZoomPlan(segments: [])
     private var pendingCompose: Task<Void, Never>?
@@ -180,6 +183,7 @@ final class StudioWindow: NSWindow {
             heading("鼠标和按键"), clickBox, haloBox, keysBox,
             heading("背景"), backgroundRow, row("边距", paddingSlider, unit: "点"), row("圆角", radiusSlider, unit: "点"),
             heading("打码"), mosaicButton, mosaicInfo,
+            heading("声音"), keyNoiseBox,
         ])
         inspector.orientation = .vertical
         inspector.alignment = .leading
@@ -187,6 +191,14 @@ final class StudioWindow: NSWindow {
         inspector.setCustomSpacing(22, after: info)
         inspector.setCustomSpacing(22, after: keysBox)
         inspector.setCustomSpacing(22, after: inspector.arrangedSubviews[inspector.arrangedSubviews.count - 4])
+        inspector.setCustomSpacing(22, after: mosaicInfo)
+        keyNoiseBox.target = self
+        keyNoiseBox.action = #selector(keyNoiseChanged)
+        keyNoiseBox.state = UserDefaults.standard.object(forKey: Self.keyNoiseKey) as? Bool ?? true ? .on : .off
+        let typed = timeline?.typing.isEmpty == false
+        keyNoiseBox.isEnabled = typed
+        keyNoiseBox.toolTip = typed ? "按键的那一瞬间把麦克风压低，打字的咔嗒声几乎听不到，说话不受影响"
+            : "这段录屏没有记录按键时间（更新到这一版之前录的，或没有打字），用不了"
         mosaicButton.target = self
         mosaicButton.action = #selector(mosaicClicked)
         mosaicButton.bezelStyle = .rounded
@@ -421,6 +433,7 @@ final class StudioWindow: NSWindow {
             guard let edited = try? await StudioMedia.edited(asset, edit: edit, duration: duration), !Task.isCancelled else { return }
             playing = edited
             player.replaceCurrentItem(with: AVPlayerItem(asset: edited))
+            await applyKeyNoise()
             await applyFinish()
             await player.seek(to: CMTime(seconds: playTime(for: t), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
             if wasPlaying { player.play() }
@@ -520,6 +533,24 @@ final class StudioWindow: NSWindow {
         saveProject()
         showStyle()
         compose()
+    }
+
+    // MARK: Sound
+
+    /// The typing on the edited time, or nothing when 去掉键盘声 is off.
+    private func editedTyping() -> [Double] {
+        guard removesKeyNoise, let timeline else { return [] }
+        return timeline.typing.compactMap { edit.editedTime($0, duration: duration) }
+    }
+
+    private func applyKeyNoise() async {
+        guard let playing, let item = player.currentItem else { return }
+        item.audioMix = await StudioMedia.keyNoiseMix(for: playing, typing: editedTyping())
+    }
+
+    @objc private func keyNoiseChanged() {
+        UserDefaults.standard.set(keyNoiseBox.state == .on, forKey: Self.keyNoiseKey)
+        Task { await applyKeyNoise() }
     }
 
     // MARK: Mosaic
@@ -658,6 +689,7 @@ final class StudioWindow: NSWindow {
         exportButton.isEnabled = false
         spinner.startAnimation(nil)
         status.stringValue = "正在导出…"
+        let typing = editedTyping()
         let (timeline, plan, mosaics) = editedTimeline()
         let style = style, scale = pixelsPerPoint, size = videoSize, asset = asset, edit = edit, duration = duration
         Task {
@@ -669,7 +701,8 @@ final class StudioWindow: NSWindow {
                 let composition = try await StudioMedia.composition(for: edited, style: style, plan: plan, scale: scale, videoSize: size,
                                                                     timeline: timeline, mosaics: mosaics, outputSize: settings.size)
                 let target = preset == .gif ? FileManager.default.temporaryDirectory.appendingPathComponent("PixSnap-\(UUID().uuidString).mp4") : url
-                try await StudioMedia.write(edited, composition: composition, bitRate: settings.bitRate, to: target) { fraction in
+                let audioMix = await StudioMedia.keyNoiseMix(for: edited, typing: typing)
+                try await StudioMedia.write(edited, composition: composition, audioMix: audioMix, bitRate: settings.bitRate, to: target) { fraction in
                     Task { @MainActor in self.status.stringValue = String(format: "正在导出… %d%%", Int(fraction * 100)) }
                 }
                 if preset == .gif {

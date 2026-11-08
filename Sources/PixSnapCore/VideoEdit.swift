@@ -114,6 +114,7 @@ public extension RecordingTimeline {
         }
         result.keys = keys.compactMap { key in edit.editedTime(key.t, duration: duration).map { Key(t: $0, label: key.label) } }
         result.marks = marks.compactMap { edit.editedTime($0, duration: duration) }
+        result.typing = typing.compactMap { edit.editedTime($0, duration: duration) }
         return result
     }
 }
