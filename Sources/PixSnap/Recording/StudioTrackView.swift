@@ -11,12 +11,16 @@ final class StudioTrackView: NSView {
     var onSelect: ((ClosedRange<Double>?) -> Void)?
     /// A zoom was clicked: the clicks it was made from.
     var onToggleZoom: (([Double]) -> Void)?
+    /// A mosaic's span was clicked.
+    var onSelectMosaic: ((UUID) -> Void)?
 
     var duration: Double = 1 { didSet { needsDisplay = true } }
     var timeline: RecordingTimeline? { didSet { needsDisplay = true } }
     /// Zooms on the recording's time, and which are switched off.
     var zooms: [(segment: ZoomPlan.Segment, on: Bool)] = [] { didSet { needsDisplay = true } }
     var edit = VideoEdit() { didSet { needsDisplay = true } }
+    var mosaics: [MosaicRegion] = [] { didSet { needsDisplay = true } }
+    var selectedMosaic: UUID? { didSet { needsDisplay = true } }
     var playhead: Double = 0 { didSet { if playhead != oldValue { needsDisplay = true } } }
     private(set) var selection: ClosedRange<Double>? { didSet { needsDisplay = true } }
 
@@ -24,7 +28,7 @@ final class StudioTrackView: NSView {
     private var dragged = false
 
     private static let labelWidth: CGFloat = 52
-    private static let rows: [(String, CGFloat)] = [("画面", 30), ("放大", 22), ("点击", 16), ("按键", 16)]
+    private static let rows: [(String, CGFloat)] = [("画面", 30), ("放大", 22), ("点击", 16), ("按键", 16), ("打码", 14)]
     private static let rowGap: CGFloat = 8
 
     override var isFlipped: Bool { true }
@@ -116,6 +120,14 @@ final class StudioTrackView: NSView {
             }
         }
 
+        // Mosaics, stacked in their row when they overlap.
+        let mosaicRow = rowRect(4)
+        for region in mosaics {
+            let rect = CGRect(x: x(region.start), y: mosaicRow.minY, width: max(4, x(min(region.end, duration)) - x(region.start)), height: mosaicRow.height)
+            NSColor.systemPurple.withAlphaComponent(region.id == selectedMosaic ? 1 : 0.6).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).fill()
+        }
+
         // Clicks, keys, marks.
         if let timeline {
             let clickRow = rowRect(2)
@@ -157,6 +169,11 @@ final class StudioTrackView: NSView {
         if rowRect(1).insetBy(dx: 0, dy: -2).contains(point),
            let zoom = zooms.first(where: { x($0.segment.start) <= point.x && point.x <= x($0.segment.end) }) {
             onToggleZoom?(zoom.segment.focus.map(\.t))
+            return
+        }
+        if rowRect(4).insetBy(dx: 0, dy: -2).contains(point),
+           let region = mosaics.last(where: { x($0.start) <= point.x && point.x <= x($0.end) }) {
+            onSelectMosaic?(region.id)
             return
         }
         dragStart = time(point.x)

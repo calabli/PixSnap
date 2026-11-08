@@ -212,6 +212,12 @@ final class RecordingResultWindow: NSPanel {
 
     /// The clicks and keys cut to match: times counted from the new start.
     private static func trimTimeline(besideVideo video: URL, to range: CMTimeRange) {
+        // 精修's cuts and mosaics too.
+        let projectURL = StudioWindow.projectURL(forVideo: video)
+        if let data = try? Data(contentsOf: projectURL), let project = try? JSONDecoder().decode(StudioProject.self, from: data),
+           let trimmed = try? JSONEncoder().encode(project.trimmed(from: range.start.seconds, to: range.end.seconds)) {
+            try? trimmed.write(to: projectURL)
+        }
         let url = TimelineRecorder.url(forVideo: video)
         guard let data = try? Data(contentsOf: url), let timeline = try? JSONDecoder().decode(RecordingTimeline.self, from: data),
               let trimmed = try? JSONEncoder().encode(timeline.trimmed(from: range.start.seconds, to: range.end.seconds)) else { return }

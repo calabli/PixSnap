@@ -29,7 +29,7 @@ final class StudioWindow: NSWindow {
         NSApp.activate()
         window.exportOnLoad = exportTo
         if let preset { window.preset = preset }
-        window.edit = edit
+        window.restoreProject(overriding: edit)
         window.load()
     }
 
@@ -57,12 +57,21 @@ final class StudioWindow: NSWindow {
     private let selectionLabel = NSTextField(labelWithString: "")
     private let presetPopup = NSPopUpButton()
     private var timeObserver: Any?
+    private var statusObserver: NSKeyValueObservation?
     /// The recording's length, and what's been cut or sped up on it.
     private var duration = 0.0
     private var edit = VideoEdit()
     /// Clicks (by their time on the recording) whose zoom was switched off.
     private var disabledClicks: Set<Double> = []
     private var selection: ClosedRange<Double>?
+    /// Boxes covered with mosaic, on the recording's time.
+    private var mosaics: [MosaicRegion] = []
+    private let overlay = MosaicOverlayView()
+    private let mosaicButton = NSButton(title: "添加打码框", target: nil, action: nil)
+    private let mosaicInfo = NSTextField(wrappingLabelWithString: "")
+    /// The zoom plan playing now (on the edited time), for placing the boxes.
+    private var currentPlan = ZoomPlan(segments: [])
+    private var pendingCompose: Task<Void, Never>?
     /// What's playing: the recording as edited.
     private var playing: AVAsset?
     private var preset: ExportPreset = ExportPreset(rawValue: UserDefaults.standard.string(forKey: "studioPreset") ?? "") ?? .original {
@@ -108,6 +117,7 @@ final class StudioWindow: NSWindow {
         player.pause()
         if let timeObserver { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
+        statusObserver = nil
         composing?.cancel()
         super.close()
         Self.open.removeAll { $0 === self }
@@ -161,12 +171,20 @@ final class StudioWindow: NSWindow {
             heading("放大"), zoomBox, row("倍数", scaleSlider, unit: "×"), row("停留", holdSlider, unit: "秒"), info,
             heading("鼠标和按键"), clickBox, haloBox, keysBox,
             heading("背景"), backgroundRow, row("边距", paddingSlider, unit: "点"), row("圆角", radiusSlider, unit: "点"),
+            heading("打码"), mosaicButton, mosaicInfo,
         ])
         inspector.orientation = .vertical
         inspector.alignment = .leading
         inspector.spacing = 10
         inspector.setCustomSpacing(22, after: info)
         inspector.setCustomSpacing(22, after: keysBox)
+        inspector.setCustomSpacing(22, after: inspector.arrangedSubviews[inspector.arrangedSubviews.count - 4])
+        mosaicButton.target = self
+        mosaicButton.action = #selector(mosaicClicked)
+        mosaicButton.bezelStyle = .rounded
+        mosaicInfo.font = .systemFont(ofSize: 12)
+        mosaicInfo.textColor = .secondaryLabelColor
+        mosaicInfo.preferredMaxLayoutWidth = 240
         inspector.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         inspector.translatesAutoresizingMaskIntoConstraints = false
 
@@ -223,8 +241,16 @@ final class StudioWindow: NSWindow {
         editBar.layer?.backgroundColor = NSColor(white: 0.14, alpha: 1).cgColor
         selected(nil)
 
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        overlay.onCreate = { [weak self] rect in self?.addMosaic(rect) }
+        overlay.onChange = { [weak self] region in self?.mosaicChanged(region) }
+        overlay.onSelect = { [weak self] id in self?.track.selectedMosaic = id }
+        overlay.onDelete = { [weak self] id in self?.deleteMosaic(id) }
+        track.onSelectMosaic = { [weak self] id in self?.selectMosaic(id) }
+
         let content = NSView()
         content.addSubview(playerView)
+        content.addSubview(overlay)
         content.addSubview(track)
         content.addSubview(editBar)
         content.addSubview(inspector)
@@ -234,9 +260,13 @@ final class StudioWindow: NSWindow {
             playerView.topAnchor.constraint(equalTo: content.topAnchor),
             playerView.bottomAnchor.constraint(equalTo: track.topAnchor),
             playerView.trailingAnchor.constraint(equalTo: inspector.leadingAnchor),
+            overlay.leadingAnchor.constraint(equalTo: playerView.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: playerView.trailingAnchor),
+            overlay.topAnchor.constraint(equalTo: playerView.topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: playerView.bottomAnchor),
             track.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             track.trailingAnchor.constraint(equalTo: inspector.leadingAnchor),
-            track.heightAnchor.constraint(equalToConstant: 142),
+            track.heightAnchor.constraint(equalToConstant: 164),
             track.bottomAnchor.constraint(equalTo: editBar.topAnchor),
             editBar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             editBar.trailingAnchor.constraint(equalTo: inspector.leadingAnchor),
@@ -356,6 +386,10 @@ final class StudioWindow: NSWindow {
             timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { time in
                 MainActor.assumeIsolated { self.showPlayhead(time.seconds) }
             }
+            // Boxes show when it stops, however it stopped.
+            statusObserver = player.observe(\.timeControlStatus) { _, _ in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self.updateOverlay() } }
+            }
             rebuild(at: 0)
             player.play()
         }
@@ -363,11 +397,12 @@ final class StudioWindow: NSWindow {
 
     /// What's played and exported: the timeline on the edited time, and the zoom plan from the
     /// clicks whose zoom is on.
-    private func editedTimeline() -> (timeline: RecordingTimeline?, plan: ZoomPlan) {
-        guard let timeline else { return (nil, ZoomPlan(segments: [])) }
+    private func editedTimeline() -> (timeline: RecordingTimeline?, plan: ZoomPlan, mosaics: [MosaicRegion]) {
+        let mosaics = project.mosaics(editedBy: edit, duration: duration)
+        guard let timeline else { return (nil, ZoomPlan(segments: []), mosaics) }
         var zoomed = timeline
         zoomed.clicks.removeAll { disabledClicks.contains($0.t) }
-        return (timeline.edited(by: edit, duration: duration), style.plan(for: zoomed.edited(by: edit, duration: duration)))
+        return (timeline.edited(by: edit, duration: duration), style.plan(for: zoomed.edited(by: edit, duration: duration)), mosaics)
     }
 
     /// Plays the recording as edited from recording time `t`.
@@ -392,11 +427,18 @@ final class StudioWindow: NSWindow {
 
     private func applyFinish() async {
         guard let playing else { return }
-        let (timeline, plan) = editedTimeline()
+        let (timeline, plan, mosaics) = editedTimeline()
         let style = style, scale = pixelsPerPoint, size = videoSize
-        guard let composition = try? await StudioMedia.composition(for: playing, style: style, plan: plan, scale: scale, videoSize: size, timeline: timeline),
+        guard let composition = try? await StudioMedia.composition(for: playing, style: style, plan: plan, scale: scale, videoSize: size,
+                                                                   timeline: timeline, mosaics: mosaics),
               !Task.isCancelled else { return }
         player.currentItem?.videoComposition = composition
+        currentPlan = plan
+        // Paused, the picture only redraws when asked.
+        if player.rate == 0, let item = player.currentItem {
+            await player.seek(to: item.currentTime(), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        updateOverlay()
         exportButton.isEnabled = true
         if status.stringValue.hasPrefix("正在读取") {
             status.stringValue = "边播放边看效果；在下面的轨道上拖选一段可以剪掉或加速。"
@@ -419,6 +461,7 @@ final class StudioWindow: NSWindow {
     private func showPlayhead(_ playerTime: Double) {
         guard playerTime.isFinite else { return }
         track.playhead = edit.originalTime(playerTime, duration: duration)
+        updateOverlay()
     }
 
     private func seek(to t: Double) {
@@ -452,6 +495,7 @@ final class StudioWindow: NSWindow {
         }
         track.edit = edit
         track.clearSelection()
+        saveProject()
         rebuild(at: range.lowerBound)
     }
 
@@ -465,8 +509,113 @@ final class StudioWindow: NSWindow {
         } else {
             disabledClicks.formUnion(clicks)
         }
+        saveProject()
         showStyle()
         compose()
+    }
+
+    // MARK: Mosaic
+
+    /// The boxes showing where the player is paused; none while it plays.
+    private func updateOverlay() {
+        let paused = player.rate == 0 && playing != nil
+        overlay.videoRect = overlay.convert(playerView.videoBounds, from: playerView)
+        overlay.outputSize = RecordingFinisher.outputSize(video: videoSize, scale: pixelsPerPoint, style: style)
+        let time = player.currentTime().seconds
+        overlay.placement = RecordingFinisher.Placement(video: videoSize, scale: pixelsPerPoint, style: style, plan: currentPlan,
+                                                        time: time.isFinite ? time : 0)
+        let showing = paused ? mosaics.filter { $0.isShowing(at: track.playhead) } : []
+        if overlay.regions != showing { overlay.regions = showing }
+        if !paused, overlay.drawing { overlay.drawing = false }
+    }
+
+    private func showMosaics() {
+        track.mosaics = mosaics
+        mosaicInfo.stringValue = mosaics.isEmpty
+            ? "盖住密码、手机号、名字。先在轨道上选一段，就只在这段打码；不选就整段都打。"
+            : "\(mosaics.count) 处打码。暂停时在画面上拖动、拉右下角改大小，⌫ 删除。"
+        updateOverlay()
+    }
+
+    @objc private func mosaicClicked() {
+        player.pause()
+        overlay.drawing = true
+        makeFirstResponder(overlay)
+        updateOverlay()
+    }
+
+    private func addMosaic(_ rect: CGRect) {
+        let span = selection ?? 0 ... duration
+        let region = MosaicRegion(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height,
+                                  start: span.lowerBound, end: span.upperBound).clamped()
+        mosaics.append(region)
+        overlay.selected = region.id
+        track.selectedMosaic = region.id
+        mosaicsChanged()
+    }
+
+    private func mosaicChanged(_ region: MosaicRegion) {
+        guard let index = mosaics.firstIndex(where: { $0.id == region.id }) else { return }
+        mosaics[index] = region
+        mosaicsChanged()
+    }
+
+    private func deleteMosaic(_ id: UUID) {
+        mosaics.removeAll { $0.id == id }
+        overlay.selected = nil
+        track.selectedMosaic = nil
+        mosaicsChanged()
+    }
+
+    private func selectMosaic(_ id: UUID) {
+        guard let region = mosaics.first(where: { $0.id == id }) else { return }
+        player.pause()
+        overlay.selected = id
+        track.selectedMosaic = id
+        if !region.isShowing(at: track.playhead) { seek(to: region.start) }
+        makeFirstResponder(overlay)
+    }
+
+    /// Shown and saved now; the picture follows a moment later, so dragging stays smooth.
+    private func mosaicsChanged() {
+        showMosaics()
+        saveProject()
+        pendingCompose?.cancel()
+        pendingCompose = Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            compose()
+        }
+    }
+
+    // MARK: Saving
+
+    /// `<video>.studio.json`, beside the recording.
+    static func projectURL(forVideo video: URL) -> URL {
+        video.deletingPathExtension().appendingPathExtension("studio.json")
+    }
+
+    private var project: StudioProject {
+        StudioProject(changes: edit.changes, disabledClicks: disabledClicks.sorted(), mosaics: mosaics)
+    }
+
+    /// What was done last time; `--studio-edit`'s edit, if any, in place of the cuts.
+    private func restoreProject(overriding override: VideoEdit) {
+        let saved = (try? Data(contentsOf: Self.projectURL(forVideo: video))).flatMap { try? JSONDecoder().decode(StudioProject.self, from: $0) }
+        edit = override.changes.isEmpty ? VideoEdit(changes: saved?.changes ?? []) : override
+        disabledClicks = Set(saved?.disabledClicks ?? [])
+        mosaics = saved?.mosaics ?? []
+        showStyle()
+        showMosaics()
+    }
+
+    private func saveProject() {
+        let url = Self.projectURL(forVideo: video)
+        if project.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+        } else if let data = try? JSONEncoder().encode(project) {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     @objc private func guideClicked() {
@@ -501,7 +650,7 @@ final class StudioWindow: NSWindow {
         exportButton.isEnabled = false
         spinner.startAnimation(nil)
         status.stringValue = "正在导出…"
-        let (timeline, plan) = editedTimeline()
+        let (timeline, plan, mosaics) = editedTimeline()
         let style = style, scale = pixelsPerPoint, size = videoSize, asset = asset, edit = edit, duration = duration
         Task {
             do {
@@ -510,7 +659,7 @@ final class StudioWindow: NSWindow {
                 let full = RecordingFinisher.outputSize(video: size, scale: scale, style: style)
                 let settings = preset.settings(size: full, duration: length)
                 let composition = try await StudioMedia.composition(for: edited, style: style, plan: plan, scale: scale, videoSize: size,
-                                                                    timeline: timeline, outputSize: settings.size)
+                                                                    timeline: timeline, mosaics: mosaics, outputSize: settings.size)
                 let target = preset == .gif ? FileManager.default.temporaryDirectory.appendingPathComponent("PixSnap-\(UUID().uuidString).mp4") : url
                 try await StudioMedia.write(edited, composition: composition, bitRate: settings.bitRate, to: target) { fraction in
                     Task { @MainActor in self.status.stringValue = String(format: "正在导出… %d%%", Int(fraction * 100)) }

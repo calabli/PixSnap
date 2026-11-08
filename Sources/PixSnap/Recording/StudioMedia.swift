@@ -43,13 +43,13 @@ enum StudioMedia {
 
     /// The finish over `asset` (already edited), its frames `outputScale` of the finished size.
     static func composition(for asset: AVAsset, style: RecordingFinisher.Style, plan: ZoomPlan, scale: CGFloat, videoSize: CGSize,
-                            timeline: RecordingTimeline?, outputSize: CGSize? = nil) async throws -> AVVideoComposition {
+                            timeline: RecordingTimeline?, mosaics: [MosaicRegion] = [], outputSize: CGSize? = nil) async throws -> AVVideoComposition {
         let full = RecordingFinisher.outputSize(video: videoSize, scale: scale, style: style)
         let size = outputSize ?? full
         let shrink = size.width / max(full.width, 1)
         let composition = try await AVMutableVideoComposition.videoComposition(with: asset) { request in
             var frame = RecordingFinisher.frame(request.sourceImage, at: request.compositionTime.seconds, plan: plan, scale: scale, style: style,
-                                                timeline: timeline)
+                                                timeline: timeline, mosaics: mosaics)
             if abs(shrink - 1) > 0.001 {
                 frame = frame.transformed(by: CGAffineTransform(scaleX: shrink, y: size.height / max(full.height, 1)))
             }

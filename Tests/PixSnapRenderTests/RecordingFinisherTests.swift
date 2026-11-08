@@ -70,5 +70,33 @@ final class RecordingFinisherTests: XCTestCase {
         let later = RecordingFinisher.frame(plain, at: 5, plan: ZoomPlan(segments: []), scale: 1, style: style, timeline: timeline)
         XCTAssertEqual(pixel(later, 200, 40).0, 255)
     }
-}
 
+    func testMosaicBlursOnlyItsBoxAndOnlyWhileShowing() {
+        var style = RecordingFinisher.Style(zooms: false)
+        style.background = nil
+        // Over the red square's edge (it's 40 px; the box is 80).
+        let region = MosaicRegion(x: 0, y: 0, width: 0.2, height: 0.4, start: 1, end: 2)
+        let plain = RecordingFinisher.frame(source(), at: 0.5, plan: ZoomPlan(segments: []), scale: 1, style: style, mosaics: [region])
+        XCTAssertEqual(pixel(plain, 41, 158).1, 255)
+        let covered = RecordingFinisher.frame(source(), at: 1.5, plan: ZoomPlan(segments: []), scale: 1, style: style, mosaics: [region])
+        // Blocks are 14 px centred on 0, so the one from 35 to 49 straddles the square's edge at 40 and
+        // takes one colour: (36, 190) was red and isn't any more, like (46, 190).
+        XCTAssertLessThan(pixel(source(), 36, 190).1, 60)
+        XCTAssertEqual(pixel(covered, 36, 190).1, pixel(covered, 46, 190).1)
+        // Outside the box nothing changes.
+        XCTAssertEqual(pixel(covered, 300, 100).1, 255)
+    }
+
+    func testPlacementRoundTrips() {
+        let style = RecordingFinisher.Style(padding: 20)
+        let plan = ZoomPlan(clicks: [RecordingTimeline.Click(t: 1, x: 0.25, y: 0.25)], scale: 2, hold: 1)
+        let placement = RecordingFinisher.Placement(video: CGSize(width: 400, height: 200), scale: 1, style: style, plan: plan, time: 1)
+        let point = placement.output(x: 0.3, y: 0.4)
+        let back = placement.source(point)
+        XCTAssertEqual(back.x, 0.3, accuracy: 1e-6)
+        XCTAssertEqual(back.y, 0.4, accuracy: 1e-6)
+        // No zoom: the recording's corner is at the card's corner.
+        let flat = RecordingFinisher.Placement(video: CGSize(width: 400, height: 200), scale: 1, style: style, plan: ZoomPlan(segments: []), time: 0)
+        XCTAssertEqual(flat.output(x: 0, y: 0), CGPoint(x: 20, y: 20))
+    }
+}

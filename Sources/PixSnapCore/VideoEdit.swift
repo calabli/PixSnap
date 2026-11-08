@@ -4,7 +4,7 @@ import Foundation
 /// played faster (waiting for something to load). The finished video's time and the recording's
 /// map both ways, so zooms, clicks and keys stay where they happened.
 public struct VideoEdit: Equatable, Sendable {
-    public struct Change: Equatable, Sendable {
+    public struct Change: Codable, Equatable, Sendable {
         public var start: Double
         public var end: Double
         /// 0 takes the stretch out; above 1 plays it that many times faster.

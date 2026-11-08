@@ -57,8 +57,9 @@ public enum RecordingFinisher {
     /// Frame `source` (its extent at the origin) at `time` seconds, finished in `style`, with the
     /// clicks, pointer and keys from `timeline` drawn over it.
     public static func frame(_ source: CIImage, at time: Double, plan: ZoomPlan, scale: CGFloat, style: Style,
-                             timeline: RecordingTimeline? = nil) -> CIImage {
+                             timeline: RecordingTimeline? = nil, mosaics: [MosaicRegion] = []) -> CIImage {
         let width = source.extent.width, height = source.extent.height
+        let source = mosaic(source, regions: mosaics.filter { $0.isShowing(at: time) }, scale: scale)
         // The zoomed part, from a top-left rect to Core Image's bottom-left one, scaled back up to fill.
         let visible = plan.visibleRect(at: time, width: Double(width), height: Double(height))
         let crop = CGRect(x: visible.minX, y: height - visible.maxY, width: visible.width, height: visible.height)
@@ -113,6 +114,52 @@ public enum RecordingFinisher {
         blend.backgroundImage = output
         blend.maskImage = mask
         return blend.outputImage?.cropped(to: canvas) ?? output
+    }
+
+    /// `source` with each region (fractions, top-left origin) turned into big square blocks, so
+    /// nothing in it can be read back.
+    static func mosaic(_ source: CIImage, regions: [MosaicRegion], scale: CGFloat) -> CIImage {
+        guard !regions.isEmpty else { return source }
+        let width = source.extent.width, height = source.extent.height
+        let block = max(8, 14 * scale)
+        let pixellate = CIFilter.pixellate()
+        pixellate.inputImage = source.clampedToExtent()
+        pixellate.scale = Float(block)
+        pixellate.center = .zero
+        guard let blocks = pixellate.outputImage else { return source }
+        var output = source
+        for region in regions {
+            let rect = CGRect(x: region.x * width, y: (1 - region.y - region.height) * height,
+                              width: region.width * width, height: region.height * height).integral
+            output = blocks.cropped(to: rect).composited(over: output)
+        }
+        return output.cropped(to: source.extent)
+    }
+
+    /// Where a spot of the recording (fractions, top-left origin) is in the finished frame at
+    /// `time` (pixels, top-left origin), and back: for drawing on the picture as it's shown.
+    public struct Placement: Sendable {
+        public let visible: CGRect
+        public let zoom: CGFloat
+        public let card: CGPoint
+        public let video: CGSize
+        public let output: CGSize
+
+        public init(video: CGSize, scale: CGFloat, style: Style, plan: ZoomPlan, time: Double) {
+            self.video = video
+            visible = plan.visibleRect(at: time, width: Double(video.width), height: Double(video.height))
+            zoom = video.width / max(visible.width, 1)
+            output = style.background == nil ? video : RecordingFinisher.outputSize(video: video, scale: scale, style: style)
+            card = CGPoint(x: ((output.width - video.width) / 2).rounded(), y: ((output.height - video.height) / 2).rounded())
+        }
+
+        public func output(x: Double, y: Double) -> CGPoint {
+            CGPoint(x: card.x + (CGFloat(x) * video.width - visible.minX) * zoom, y: card.y + (CGFloat(y) * video.height - visible.minY) * zoom)
+        }
+
+        public func source(_ point: CGPoint) -> (x: Double, y: Double) {
+            (Double(((point.x - card.x) / zoom + visible.minX) / video.width), Double(((point.y - card.y) / zoom + visible.minY) / video.height))
+        }
     }
 
     // MARK: Over the recording
