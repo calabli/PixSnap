@@ -60,6 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let folder = arguments.firstIndex(of: "--guide-export").flatMap { arguments.indices.contains($0 + 1) ? URL(fileURLWithPath: arguments[$0 + 1], isDirectory: true) : nil }
             GuideWindow.show(video: URL(fileURLWithPath: arguments[flag + 1]), exportTo: folder)
         }
+        // `--recording-setup x,y,w,h`: the panel before recording, for that region (global coordinates).
+        if let flag = arguments.firstIndex(of: "--recording-setup"), arguments.indices.contains(flag + 1) {
+            let parts = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }
+            // `--auto-start 秒数`: start, and stop that long into the recording.
+            let auto = arguments.firstIndex(of: "--auto-start").flatMap { arguments.indices.contains($0 + 1) ? Double(arguments[$0 + 1]) : nil }
+            if parts.count == 4 { coordinator.setUpRecording(of: CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3]), autoStart: auto) }
+        }
         // `--studio <video.mp4>`: 精修 for a recording (its timeline beside it, if any).
         if let flag = arguments.firstIndex(of: "--studio"), arguments.indices.contains(flag + 1) {
             let export = arguments.firstIndex(of: "--studio-export").flatMap { arguments.indices.contains($0 + 1) ? URL(fileURLWithPath: arguments[$0 + 1]) : nil }

@@ -16,7 +16,7 @@ final class StudioWindow: NSWindow {
 
     /// Opens 精修 for the recording at `video` (its timeline, if any, is beside it); with
     /// `exportTo`, exports there straight away (`--studio-export`).
-    static func show(video: URL, exportTo: URL? = nil, preset: ExportPreset? = nil, edit: VideoEdit = VideoEdit()) {
+    static func show(video: URL, exportTo: URL? = nil, preset: ExportPreset? = nil, edit: VideoEdit = VideoEdit(), on screen: NSScreen? = nil) {
         if let existing = open.first(where: { $0.video == video }) {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate()
@@ -25,6 +25,14 @@ final class StudioWindow: NSWindow {
         let window = StudioWindow(video: video)
         open.append(window)
         window.center()
+        // On the screen it was recorded on, not wherever the menu bar is.
+        if let visible = screen?.visibleFrame {
+            var frame = window.frame
+            frame.size.width = min(frame.width, visible.width)
+            frame.size.height = min(frame.height, visible.height)
+            frame.origin = CGPoint(x: visible.midX - frame.width / 2, y: visible.midY - frame.height / 2)
+            window.setFrame(frame, display: false)
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate()
         window.exportOnLoad = exportTo
@@ -340,7 +348,7 @@ final class StudioWindow: NSWindow {
     }
 
     /// The style last used, so the next recording starts the same.
-    private static func savedStyle() -> RecordingFinisher.Style {
+    static func savedStyle() -> RecordingFinisher.Style {
         let defaults = UserDefaults.standard
         guard let saved = defaults.dictionary(forKey: styleKey) else { return RecordingFinisher.Style() }
         var style = RecordingFinisher.Style()
@@ -356,7 +364,7 @@ final class StudioWindow: NSWindow {
         return style
     }
 
-    private static func save(_ style: RecordingFinisher.Style) {
+    static func save(_ style: RecordingFinisher.Style) {
         let index = backgrounds.firstIndex { entry in
             switch (entry.1, style.background) {
             case (nil, nil): true

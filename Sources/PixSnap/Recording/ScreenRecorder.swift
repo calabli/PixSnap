@@ -30,7 +30,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         .appendingPathComponent("com.pixsnap.PixSnap/Recordings", isDirectory: true)
 
     init(filter: SCContentFilter, sourceRect: CGRect, pixelSize: CGSize, fps: Int, showsCursor: Bool,
-         recordsSystemAudio: Bool = false, recordsMicrophone: Bool = false) throws {
+         recordsSystemAudio: Bool = false, recordsMicrophone: Bool = false, microphoneID: String? = nil) throws {
         self.pixelSize = pixelSize
         try FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
         url = Self.folder.appendingPathComponent("\(UUID().uuidString).mp4")
@@ -50,7 +50,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         let usesMicrophone: Bool
         if #available(macOS 15, *), recordsMicrophone {
             configuration.captureMicrophone = true
-            configuration.microphoneCaptureDeviceID = AVCaptureDevice.default(for: .audio)?.uniqueID
+            configuration.microphoneCaptureDeviceID = microphoneID.flatMap { AVCaptureDevice(uniqueID: $0)?.uniqueID }
+                ?? AVCaptureDevice.default(for: .audio)?.uniqueID
             usesMicrophone = true
         } else {
             usesMicrophone = false

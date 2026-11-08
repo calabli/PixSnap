@@ -119,6 +119,7 @@ final class ScreenCapturer {
     /// windows numbered `windowNumbers` (the recording's own frame and controls); PixSnap's other
     /// windows are recorded like any app's.
     func makeRecorder(for rect: CGRect, on screen: NSScreen, fps: Int, showsCursor: Bool, systemAudio: Bool = false, microphone: Bool = false,
+                      microphoneID: String? = nil, hidingNotifications: Bool = false,
                       hiding windowNumbers: [Int]) async throws -> ScreenRecorder {
         // Fresh, so the windows to hide (just put on screen) are in it.
         var content = try await freshContent()
@@ -130,12 +131,16 @@ final class ScreenCapturer {
         guard let display = content.displays.first(where: { $0.displayID == screen.displayID }) else {
             throw CocoaError(.featureUnsupported)
         }
-        let hidden = content.windows.filter { wanted.contains($0.windowID) }
+        // Notification banners belong to Notification Center's own process.
+        let hidden = content.windows.filter {
+            wanted.contains($0.windowID) || (hidingNotifications && $0.owningApplication?.bundleIdentifier == "com.apple.notificationcenterui")
+        }
         let filter = SCContentFilter(display: display, excludingWindows: hidden)
         let sourceRect = CGRect(x: rect.minX - screen.frame.minX, y: screen.frame.maxY - rect.maxY, width: rect.width, height: rect.height)
         return try ScreenRecorder(filter: filter, sourceRect: sourceRect,
                                   pixelSize: recordingPixelSize(points: rect.size, scale: screen.backingScaleFactor),
-                                  fps: fps, showsCursor: showsCursor, recordsSystemAudio: systemAudio, recordsMicrophone: microphone)
+                                  fps: fps, showsCursor: showsCursor, recordsSystemAudio: systemAudio, recordsMicrophone: microphone,
+                                  microphoneID: microphoneID)
     }
 
     /// Captures one window by itself: nothing in front of or behind it, on transparency. The capture

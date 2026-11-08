@@ -25,14 +25,20 @@ final class RecordingSession {
     private var pausedAt: Date?
     private var timer: Timer?
     private var isEnding = false
+    /// 讲解模式: no clicks or keys drawn live (精修 adds them), and 精修 opens afterwards.
+    let isTutorial: Bool
+    /// The camera bubble from the setup panel, closed with the recording.
+    private let camera: CameraBubble?
 
-    init(region: CGRect, on screen: NSScreen) {
+    init(region: CGRect, on screen: NSScreen, tutorial: Bool = false, camera: CameraBubble? = nil) {
         self.region = region
         self.screen = screen
+        isTutorial = tutorial
+        self.camera = camera
         outline = RegionFrameWindow(region: region, screen: screen, color: .systemRed)
         controls = RecordingControlsPanel()
         let settings = AppSettings.shared
-        inputs = settings.highlightsClicks || settings.showsKeystrokes
+        inputs = !tutorial && (settings.highlightsClicks || settings.showsKeystrokes)
             ? InputOverlayWindow(region: region, clicks: settings.highlightsClicks, keys: settings.showsKeystrokes) : nil
         controls.onStop = { [weak self] in self?.stop() }
         controls.onPause = { [weak self] in self?.togglePause() }
@@ -55,6 +61,8 @@ final class RecordingSession {
                                                                         showsCursor: settings.recordsCursor,
                                                                         systemAudio: settings.recordsSystemAudio,
                                                                         microphone: settings.recordsMicrophone,
+                                                                        microphoneID: settings.microphoneID,
+                                                                        hidingNotifications: settings.hidesNotificationsInRecordings,
                                                                         hiding: [outline.windowNumber, controls.windowNumber])
             self.recorder = recorder
             try await recorder.start()
@@ -135,6 +143,7 @@ final class RecordingSession {
         controls.orderOut(nil)
         inputs?.stop()
         inputs?.orderOut(nil)
+        camera?.close()
         markKey.unregister()
     }
 }

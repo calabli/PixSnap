@@ -66,6 +66,32 @@ final class AppSettings {
         didSet { defaults.set(showsKeystrokes, forKey: Keys.showsKeystrokes) }
     }
 
+    /// 讲解模式: a recording meant to explain something. It opens 精修 when done (zooms, pointer and
+    /// keys are added there rather than drawn live), after a 3-second countdown.
+    var recordsTutorial: Bool {
+        didSet { defaults.set(recordsTutorial, forKey: Keys.recordsTutorial) }
+    }
+
+    /// The microphone to record, by its unique ID; nil for the Mac's default.
+    var microphoneID: String? {
+        didSet { defaults.set(microphoneID, forKey: Keys.microphoneID) }
+    }
+
+    /// Whether notification banners are left out of recordings (on by default).
+    var hidesNotificationsInRecordings: Bool {
+        didSet { defaults.set(hidesNotificationsInRecordings, forKey: Keys.hidesNotificationsInRecordings) }
+    }
+
+    /// Whether a round camera bubble sits in the corner of recordings.
+    var showsCameraBubble: Bool {
+        didSet { defaults.set(showsCameraBubble, forKey: Keys.showsCameraBubble) }
+    }
+
+    /// In 讲解模式, whether the step-by-step guide opens beside 精修 when done.
+    var opensGuideAfterTutorial: Bool {
+        didSet { defaults.set(opensGuideAfterTutorial, forKey: Keys.opensGuideAfterTutorial) }
+    }
+
     /// Shadow and background for window captures.
     var windowCaptureStyle: WindowCaptureStyle {
         didSet { if let data = try? JSONEncoder().encode(windowCaptureStyle) { defaults.set(data, forKey: Keys.windowCaptureStyle) } }
@@ -154,6 +180,11 @@ final class AppSettings {
         static let recordsMicrophone = "recordsMicrophone"
         static let highlightsClicks = "highlightsClicks"
         static let showsKeystrokes = "showsKeystrokes"
+        static let recordsTutorial = "recordsTutorial"
+        static let microphoneID = "microphoneID"
+        static let hidesNotificationsInRecordings = "hidesNotificationsInRecordings"
+        static let showsCameraBubble = "showsCameraBubble"
+        static let opensGuideAfterTutorial = "opensGuideAfterTutorial"
         static let copiesAfterCapture = "copiesAfterCapture"
         static let saveFolderPath = "saveFolderPath"
         static let asksWhereToSave = "asksWhereToSave"
@@ -190,6 +221,11 @@ final class AppSettings {
         recordsMicrophone = defaults.bool(forKey: Keys.recordsMicrophone)
         highlightsClicks = defaults.bool(forKey: Keys.highlightsClicks)
         showsKeystrokes = defaults.bool(forKey: Keys.showsKeystrokes)
+        recordsTutorial = defaults.bool(forKey: Keys.recordsTutorial)
+        microphoneID = defaults.string(forKey: Keys.microphoneID)
+        hidesNotificationsInRecordings = defaults.object(forKey: Keys.hidesNotificationsInRecordings) as? Bool ?? true
+        showsCameraBubble = defaults.bool(forKey: Keys.showsCameraBubble)
+        opensGuideAfterTutorial = defaults.bool(forKey: Keys.opensGuideAfterTutorial)
         windowCaptureStyle = defaults.data(forKey: Keys.windowCaptureStyle)
             .flatMap { try? JSONDecoder().decode(WindowCaptureStyle.self, from: $0) } ?? .default
         copiesAfterCapture = defaults.bool(forKey: Keys.copiesAfterCapture)

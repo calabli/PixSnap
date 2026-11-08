@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 PixSnap</string>
+	<key>NSCameraUsageDescription</key>
+	<string>录屏时可以在角落放一个摄像头小窗，把你自己也录进去。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>录屏时录下你的声音（在设置 › 录屏里打开“录制麦克风”时才会用到）。</string>
 </dict>

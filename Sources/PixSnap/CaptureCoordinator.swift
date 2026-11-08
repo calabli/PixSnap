@@ -22,6 +22,8 @@ final class CaptureCoordinator {
     /// The selection is for a screen recording.
     private var selectsRecordingRegion = false
     private var recording: RecordingSession?
+    /// The panel before a recording, while it's open.
+    private var recordingSetup: RecordingSetupPanel?
     private var recordingResults: [RecordingResultWindow] = []
     private var scrollSession: ScrollCaptureSession?
 
@@ -259,14 +261,55 @@ final class CaptureCoordinator {
             recording.stop()
             return
         }
+        // The shortcut again on the setup panel: start.
+        if let recordingSetup {
+            recordingSetup.start()
+            return
+        }
         guard !isCapturing else { return }
         selectsRecordingRegion = true
         startCapture()
         if !isCapturing { selectsRecordingRegion = false }
     }
 
-    private func startRecording(in region: CGRect, on screen: NSScreen) {
-        let session = RecordingSession(region: region, on: screen)
+    /// The setup panel first (普通 or 讲解, sound, camera), then — after a countdown in 讲解 — the recording.
+    func setUpRecording(in region: CGRect, on screen: NSScreen) {
+        let outline = RegionFrameWindow(region: region, screen: screen)
+        let panel = RecordingSetupPanel(region: region, on: screen)
+        panel.onCancel = { [weak self] in
+            outline.orderOut(nil)
+            self?.recordingSetup = nil
+        }
+        panel.onStart = { [weak self] in
+            guard let self else { return }
+            recordingSetup = nil
+            let camera = panel.cameraBubble
+            guard AppSettings.shared.recordsTutorial else {
+                outline.orderOut(nil)
+                startRecording(in: region, on: screen, tutorial: false, camera: camera)
+                return
+            }
+            let countdown = CountdownWindow(seconds: 3, beside: region, on: screen)
+            countdown.onFinish = { [weak self] in
+                outline.orderOut(nil)
+                self?.countdown = nil
+                self?.startRecording(in: region, on: screen, tutorial: true, camera: camera)
+            }
+            countdown.onCancel = { [weak self] in
+                outline.orderOut(nil)
+                camera?.close()
+                self?.countdown = nil
+            }
+            self.countdown = countdown
+            countdown.start()
+        }
+        recordingSetup = panel
+        outline.orderFrontRegardless()
+        panel.show()
+    }
+
+    private func startRecording(in region: CGRect, on screen: NSScreen, tutorial: Bool = false, camera: CameraBubble? = nil) {
+        let session = RecordingSession(region: region, on: screen, tutorial: tutorial, camera: camera)
         let sourceApp = NSWorkspace.shared.frontmostApplication
         session.onFinish = { [weak self] result in
             self?.recording = nil
@@ -276,6 +319,12 @@ final class CaptureCoordinator {
             let entry = HistoryLibrary.shared.addRecording(url, duration: duration, pixelSize: size, scale: screen.backingScaleFactor,
                                                            sourceApp: sourceApp)
             let video = entry.flatMap { HistoryLibrary.shared.videoURL(for: $0) } ?? url
+            if tutorial {
+                // Straight into 精修 (and the guide), where the zooms, pointer and keys go on.
+                StudioWindow.show(video: video, on: screen)
+                if AppSettings.shared.opensGuideAfterTutorial { GuideWindow.show(video: video) }
+                return
+            }
             showRecording(video, duration: duration, pixelSize: size, near: region, on: screen, historyID: entry?.id)
         }
         recording = session
@@ -287,6 +336,19 @@ final class CaptureCoordinator {
         window.onClosed = { [weak self] closed in self?.recordingResults.removeAll { $0 === closed } }
         recordingResults.append(window)
         window.orderFrontRegardless()
+    }
+
+    /// Development: the setup panel for `region` (global AppKit coordinates), as if just selected.
+    /// With `autoStart`, presses 开始录制 a second later and stops that many seconds into the recording.
+    func setUpRecording(of region: CGRect, autoStart: Double? = nil) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(region) }) else { return }
+        setUpRecording(in: region, on: screen)
+        guard let seconds = autoStart else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.recordingSetup?.start()
+            let countdown = AppSettings.shared.recordsTutorial ? 3.5 : 0.5
+            DispatchQueue.main.asyncAfter(deadline: .now() + countdown + seconds) { [weak self] in self?.recording?.stop() }
+        }
     }
 
     /// Development: records `region` (global AppKit coordinates) for `seconds` without selecting it,
@@ -478,7 +540,7 @@ final class CaptureCoordinator {
                 startScrolling(in: region, on: frozen.screen, sourceApp: sourceApp)
             } else if recording {
                 guard region.width >= 16, region.height >= 16 else { return }
-                startRecording(in: region, on: frozen.screen)
+                setUpRecording(in: region, on: frozen.screen)
             } else {
                 guard region.width >= 1, region.height >= 1 else { return }
                 startCountdown(over: region, on: frozen.screen, sourceApp: sourceApp)
