@@ -63,7 +63,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // `--studio <video.mp4>`: 精修 for a recording (its timeline beside it, if any).
         if let flag = arguments.firstIndex(of: "--studio"), arguments.indices.contains(flag + 1) {
             let export = arguments.firstIndex(of: "--studio-export").flatMap { arguments.indices.contains($0 + 1) ? URL(fileURLWithPath: arguments[$0 + 1]) : nil }
-            StudioWindow.show(video: URL(fileURLWithPath: arguments[flag + 1]), exportTo: export)
+            // `--studio-preset wechat`, and `--studio-edit 2-4:0,6-10:4` (cut 2–4 s, 6–10 s at 4×).
+            let preset = arguments.firstIndex(of: "--studio-preset").flatMap { arguments.indices.contains($0 + 1) ? ExportPreset(rawValue: arguments[$0 + 1]) : nil }
+            var edit = VideoEdit()
+            if let index = arguments.firstIndex(of: "--studio-edit"), arguments.indices.contains(index + 1) {
+                for item in arguments[index + 1].split(separator: ",") {
+                    let parts = item.split(whereSeparator: { $0 == "-" || $0 == ":" }).compactMap { Double($0) }
+                    if parts.count == 3 { edit.apply(.init(start: parts[0], end: parts[1], speed: parts[2])) }
+                }
+            }
+            StudioWindow.show(video: URL(fileURLWithPath: arguments[flag + 1]), exportTo: export, preset: preset, edit: edit)
         }
         // `--translate-newest`: 截图翻译 on the newest capture in history, as its menus do.
         if arguments.contains("--translate-newest"), let newest = HistoryLibrary.shared.recent(limit: 1).first {

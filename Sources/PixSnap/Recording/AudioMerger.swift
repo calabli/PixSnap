@@ -47,21 +47,26 @@ enum AudioMerger {
     }
 
     /// Copies one track's samples across as fast as the writer takes them.
-    private final class Pump: @unchecked Sendable {
+    final class Pump: @unchecked Sendable {
         let input: AVAssetWriterInput
-        let output: AVAssetReaderOutput
+        let next: () -> CMSampleBuffer?
         private let queue = DispatchQueue(label: "com.pixsnap.PixSnap.merge")
 
         init(input: AVAssetWriterInput, output: AVAssetReaderOutput) {
             self.input = input
-            self.output = output
+            next = { output.copyNextSampleBuffer() }
+        }
+
+        init(input: AVAssetWriterInput, next: @escaping () -> CMSampleBuffer?) {
+            self.input = input
+            self.next = next
         }
 
         func run() async {
             await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
                 input.requestMediaDataWhenReady(on: queue) { [self] in
                     while input.isReadyForMoreMediaData {
-                        guard let sample = output.copyNextSampleBuffer() else {
+                        guard let sample = next() else {
                             input.markAsFinished()
                             done.resume()
                             return
