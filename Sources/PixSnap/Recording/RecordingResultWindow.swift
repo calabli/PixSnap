@@ -329,9 +329,12 @@ final class RecordingResultWindow: NSPanel {
 
     @objc private func closeClicked() { close() }
 
+    /// 精修 takes over: this window goes, so it isn't floating over the one being edited. The
+    /// recording stays in history (or in Caches, with history off) for 精修 to use.
     @objc private func studioClicked() {
         player.pause()
         StudioWindow.show(video: video)
+        close()
     }
 
     // MARK: Deleting
