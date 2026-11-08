@@ -108,6 +108,8 @@ final class HistoryLibrary {
         let stored = HistoryFiles.videoURL(id: entry.id, in: originals)
         do {
             try FileManager.default.moveItem(at: video, to: stored)
+            // Its clicks and keys go along, for zooming and the guide.
+            try? FileManager.default.moveItem(at: TimelineRecorder.url(forVideo: video), to: TimelineRecorder.url(forVideo: stored))
         } catch {
             NSLog("PixSnap could not keep a recording in history: \(error)")
             return nil
@@ -409,7 +411,7 @@ private enum HistoryFiles {
     }
 
     static func remove(id: UUID, originals: URL, thumbnails: URL) {
-        for name in ["\(id.uuidString).heic", "\(id.uuidString).png", "\(id.uuidString).mp4"] {
+        for name in ["\(id.uuidString).heic", "\(id.uuidString).png", "\(id.uuidString).mp4", "\(id.uuidString).timeline.json"] {
             try? FileManager.default.removeItem(at: originals.appendingPathComponent(name))
         }
         for name in ["\(id.uuidString).jpg", "\(id.uuidString).gif"] {

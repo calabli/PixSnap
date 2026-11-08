@@ -16,6 +16,9 @@ final class RecordingSession {
     private let controls: RecordingControlsPanel
     private let inputs: InputOverlayWindow?
     private var recorder: ScreenRecorder?
+    /// The clicks, keys and marks, saved beside the video for zooming and the guide afterwards.
+    private var timeline: TimelineRecorder?
+    private let markKey = HotKey()
     private var started = Date()
     /// Time spent paused, and when the current pause began.
     private var pausedFor: TimeInterval = 0
@@ -33,6 +36,7 @@ final class RecordingSession {
             ? InputOverlayWindow(region: region, clicks: settings.highlightsClicks, keys: settings.showsKeystrokes) : nil
         controls.onStop = { [weak self] in self?.stop() }
         controls.onPause = { [weak self] in self?.togglePause() }
+        controls.onMark = { [weak self] in self?.mark() }
         controls.onCancel = { [weak self] in self?.cancel() }
     }
 
@@ -56,6 +60,11 @@ final class RecordingSession {
             try await recorder.start()
             started = Date()
             inputs?.start()
+            let timeline = TimelineRecorder(region: region, recorder: recorder)
+            timeline.start()
+            self.timeline = timeline
+            markKey.onPress = { [weak self] in self?.mark() }
+            _ = markKey.register(Shortcut(keyCode: 46, modifiers: [.option, .shift], keyLabel: "M"))
             timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.tick() }
             }
@@ -88,12 +97,21 @@ final class RecordingSession {
         tick()
     }
 
+    /// ⌥⇧M or the flag: this moment becomes a step of its own in the guide.
+    func mark() {
+        guard !isEnding, pausedAt == nil, let timeline else { return }
+        timeline.mark()
+        controls.flashMark()
+    }
+
     func stop() {
         guard !isEnding, let recorder else { return }
         isEnding = true
         controls.isFinishing = true
+        timeline?.stop()
         Task {
             let duration = await recorder.stop()
+            if duration != nil { timeline?.save(besideVideo: recorder.url) }
             close()
             onFinish(duration.map { (recorder.url, $0) })
         }
@@ -102,6 +120,7 @@ final class RecordingSession {
     func cancel() {
         guard !isEnding else { return }
         isEnding = true
+        timeline?.stop()
         Task {
             await recorder?.cancel()
             close()
@@ -116,6 +135,7 @@ final class RecordingSession {
         controls.orderOut(nil)
         inputs?.stop()
         inputs?.orderOut(nil)
+        markKey.unregister()
     }
 }
 
@@ -125,6 +145,7 @@ private final class RecordingControlsPanel: NSPanel {
     var onStop: (() -> Void)?
     var onCancel: (() -> Void)?
     var onPause: (() -> Void)?
+    var onMark: (() -> Void)?
 
     var isPaused = false {
         didSet {
@@ -157,7 +178,8 @@ private final class RecordingControlsPanel: NSPanel {
     private let stop = NSButton(title: "停止", target: nil, action: nil)
     private let cancel = NSButton(title: "取消", target: nil, action: nil)
     private let pause = NSButton(image: NSImage(systemSymbolName: "pause.fill", accessibilityDescription: "暂停")!, target: nil, action: nil)
-    private static let size = CGSize(width: 290, height: 40)
+    private let flag = NSButton(image: NSImage(systemSymbolName: "flag", accessibilityDescription: "标记一步")!, target: nil, action: nil)
+    private static let size = CGSize(width: 330, height: 40)
 
     private static var pulse: CABasicAnimation {
         let pulse = CABasicAnimation(keyPath: "opacity")
@@ -208,8 +230,13 @@ private final class RecordingControlsPanel: NSPanel {
         pause.target = self
         pause.action = #selector(pauseClicked)
         pause.toolTip = "暂停：暂停的这段不会录进去"
+        flag.bezelStyle = .rounded
+        flag.target = self
+        flag.action = #selector(flagClicked)
+        flag.contentTintColor = .systemOrange
+        flag.toolTip = "标记一步（⌥⇧M）：这一刻在图文教程里单独成一步"
 
-        let stack = NSStackView(views: [dot, time, NSView(), pause, cancel, stop])
+        let stack = NSStackView(views: [dot, time, NSView(), flag, pause, cancel, stop])
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 8)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -238,6 +265,15 @@ private final class RecordingControlsPanel: NSPanel {
     @objc private func stopClicked() { onStop?() }
     @objc private func cancelClicked() { onCancel?() }
     @objc private func pauseClicked() { onPause?() }
+    @objc private func flagClicked() { onMark?() }
+
+    /// The flag fills in for a moment to say the mark was taken.
+    func flashMark() {
+        flag.image = NSImage(systemSymbolName: "flag.fill", accessibilityDescription: "已标记")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            self?.flag.image = NSImage(systemSymbolName: "flag", accessibilityDescription: "标记一步")
+        }
+    }
 }
 
 /// Over the region while recording, and recorded with it: a ring where each click lands, and the

@@ -112,6 +112,15 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
 
     private static var now: CMTime { CMClockGetTime(CMClockGetHostTimeClock()) }
 
+    /// Seconds into the video at `hostSeconds` (the clock `NSEvent.timestamp` and
+    /// `ProcessInfo.systemUptime` use), or nil before the first frame or while paused.
+    func videoTime(atHostSeconds hostSeconds: TimeInterval) -> Double? {
+        queue.sync {
+            guard let firstTime, pausedAt == nil else { return nil }
+            return max(0, hostSeconds - pausedFor.seconds - firstTime.seconds)
+        }
+    }
+
     func start() async throws {
         guard writer.startWriting() else { throw writer.error ?? CocoaError(.fileWriteUnknown) }
         try await stream.startCapture()

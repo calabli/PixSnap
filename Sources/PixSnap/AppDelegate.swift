@@ -55,6 +55,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if arguments.contains("--settings") { settingsWindow.show() }
         if arguments.contains("--check-update") { Updater.shared.check(userInitiated: true) }
+        // `--studio <video.mp4>`: 精修 for a recording (its timeline beside it, if any).
+        if let flag = arguments.firstIndex(of: "--studio"), arguments.indices.contains(flag + 1) {
+            let export = arguments.firstIndex(of: "--studio-export").flatMap { arguments.indices.contains($0 + 1) ? URL(fileURLWithPath: arguments[$0 + 1]) : nil }
+            StudioWindow.show(video: URL(fileURLWithPath: arguments[flag + 1]), exportTo: export)
+        }
         // `--translate-newest`: 截图翻译 on the newest capture in history, as its menus do.
         if arguments.contains("--translate-newest"), let newest = HistoryLibrary.shared.recent(limit: 1).first {
             coordinator.translateHistoryEntry(newest)

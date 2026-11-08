@@ -40,7 +40,7 @@ final class RecordingResultWindow: NSPanel {
         // The video, scaled to fit, with the bar under it; placed over the recorded region.
         let fit = min(1, Self.largest.width / max(region.width, 1), Self.largest.height / max(region.height, 1))
         let videoSize = CGSize(width: max(240, (region.width * fit).rounded()), height: max(120, (region.height * fit).rounded()))
-        let size = CGSize(width: max(videoSize.width, historyID == nil ? 540 : 610), height: videoSize.height + Self.barHeight + 6)
+        let size = CGSize(width: max(videoSize.width, historyID == nil ? 610 : 680), height: videoSize.height + Self.barHeight + 6)
         let visible = screen.visibleFrame
         let origin = CGPoint(x: min(max(region.midX - size.width / 2, visible.minX + 10), visible.maxX - size.width - 10),
                              y: min(max(region.midY - size.height / 2, visible.minY + 10), visible.maxY - size.height - 10))
@@ -82,6 +82,7 @@ final class RecordingResultWindow: NSPanel {
         var views: [NSView] = [
             status,
             button("剪辑", symbol: "scissors", tip: "剪掉开头和结尾", action: #selector(trimClicked)),
+            button("精修", symbol: "wand.and.stars", tip: "在点击的地方自动放大，加上背景、圆角和阴影，导出成片", action: #selector(studioClicked)),
             button("存为视频", symbol: "film", tip: "保存为 MP4", action: #selector(saveVideo)),
             button("存为 GIF", symbol: "photo.on.rectangle", tip: "转成 GIF 保存（15 帧/秒，最宽 800 像素）", action: #selector(saveGIF)),
             drag,
@@ -196,6 +197,7 @@ final class RecordingResultWindow: NSPanel {
                 } else {
                     _ = try FileManager.default.replaceItemAt(source, withItemAt: trimmed)
                 }
+                Self.trimTimeline(besideVideo: source, to: range)
                 duration = length
                 finishTrimming()
                 let seconds = Int(length.rounded())
@@ -206,6 +208,14 @@ final class RecordingResultWindow: NSPanel {
                 status.stringValue = "剪辑失败"
             }
         }
+    }
+
+    /// The clicks and keys cut to match: times counted from the new start.
+    private static func trimTimeline(besideVideo video: URL, to range: CMTimeRange) {
+        let url = TimelineRecorder.url(forVideo: video)
+        guard let data = try? Data(contentsOf: url), let timeline = try? JSONDecoder().decode(RecordingTimeline.self, from: data),
+              let trimmed = try? JSONEncoder().encode(timeline.trimmed(from: range.start.seconds, to: range.end.seconds)) else { return }
+        try? trimmed.write(to: url)
     }
 
     private static func export(_ video: URL, range: CMTimeRange) async throws -> URL {
@@ -318,6 +328,11 @@ final class RecordingResultWindow: NSPanel {
     }
 
     @objc private func closeClicked() { close() }
+
+    @objc private func studioClicked() {
+        player.pause()
+        StudioWindow.show(video: video)
+    }
 
     // MARK: Deleting
 
