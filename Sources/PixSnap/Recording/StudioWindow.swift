@@ -43,6 +43,7 @@ final class StudioWindow: NSWindow {
     private let info = NSTextField(wrappingLabelWithString: "")
     private let status = NSTextField(labelWithString: "")
     private let exportButton = NSButton(title: "导出视频…", target: nil, action: nil)
+    private let guideButton = NSButton(title: "图文教程", target: nil, action: nil)
     private let spinner = NSProgressIndicator()
     private var composing: Task<Void, Never>?
 
@@ -52,6 +53,9 @@ final class StudioWindow: NSWindow {
     private let backgroundPopup = NSPopUpButton()
     private let paddingSlider = NSSlider(value: 48, minValue: 0, maxValue: 120, target: nil, action: nil)
     private let radiusSlider = NSSlider(value: 14, minValue: 0, maxValue: 30, target: nil, action: nil)
+    private let clickBox = NSButton(checkboxWithTitle: "点击效果", target: nil, action: nil)
+    private let haloBox = NSButton(checkboxWithTitle: "鼠标光晕", target: nil, action: nil)
+    private let keysBox = NSButton(checkboxWithTitle: "显示按键（写出 Command 等）", target: nil, action: nil)
     private var valueLabels: [NSSlider: NSTextField] = [:]
 
     private static let backgrounds: [(String, (RGB, RGB)?)] = [
@@ -116,8 +120,10 @@ final class StudioWindow: NSWindow {
             value.widthAnchor.constraint(equalToConstant: 38).isActive = true
             return stack
         }
-        zoomBox.target = self
-        zoomBox.action = #selector(controlChanged)
+        for box in [zoomBox, clickBox, haloBox, keysBox] {
+            box.target = self
+            box.action = #selector(controlChanged)
+        }
         backgroundPopup.addItems(withTitles: Self.backgrounds.map(\.0))
         backgroundPopup.target = self
         backgroundPopup.action = #selector(controlChanged)
@@ -129,12 +135,14 @@ final class StudioWindow: NSWindow {
         backgroundRow.spacing = 8
         let inspector = NSStackView(views: [
             heading("放大"), zoomBox, row("倍数", scaleSlider, unit: "×"), row("停留", holdSlider, unit: "秒"), info,
+            heading("鼠标和按键"), clickBox, haloBox, keysBox,
             heading("背景"), backgroundRow, row("边距", paddingSlider, unit: "点"), row("圆角", radiusSlider, unit: "点"),
         ])
         inspector.orientation = .vertical
         inspector.alignment = .leading
         inspector.spacing = 10
         inspector.setCustomSpacing(22, after: info)
+        inspector.setCustomSpacing(22, after: keysBox)
         inspector.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
         inspector.translatesAutoresizingMaskIntoConstraints = false
 
@@ -148,7 +156,14 @@ final class StudioWindow: NSWindow {
         status.textColor = .secondaryLabelColor
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let bottom = NSStackView(views: [spinner, status, NSView(), exportButton])
+        guideButton.target = self
+        guideButton.action = #selector(guideClicked)
+        guideButton.bezelStyle = .rounded
+        let steps = timeline.map { StepGuide.steps(from: $0).count } ?? 0
+        guideButton.title = steps > 0 ? "图文教程（\(steps) 步）" : "图文教程"
+        guideButton.isEnabled = steps > 0
+        guideButton.toolTip = steps > 0 ? "每次点击一步，自动配图和标题，导出长图或 Markdown" : "这段录屏没有记录到点击，做不了图文教程"
+        let bottom = NSStackView(views: [spinner, status, NSView(), guideButton, exportButton])
         bottom.spacing = 8
         bottom.edgeInsets = NSEdgeInsets(top: 10, left: 16, bottom: 12, right: 16)
         bottom.translatesAutoresizingMaskIntoConstraints = false
@@ -190,6 +205,10 @@ final class StudioWindow: NSWindow {
         } ?? 0
         backgroundPopup.selectItem(at: index)
         let hasTimeline = timeline != nil
+        clickBox.state = style.clickEffects ? .on : .off
+        haloBox.state = style.pointerHalo ? .on : .off
+        keysBox.state = style.showsKeys ? .on : .off
+        for box in [clickBox, haloBox, keysBox] { box.isEnabled = hasTimeline }
         zoomBox.isEnabled = hasTimeline
         scaleSlider.isEnabled = hasTimeline && style.zooms
         holdSlider.isEnabled = hasTimeline && style.zooms
@@ -210,6 +229,9 @@ final class StudioWindow: NSWindow {
 
     @objc private func controlChanged() {
         style.zooms = zoomBox.state == .on
+        style.clickEffects = clickBox.state == .on
+        style.pointerHalo = haloBox.state == .on
+        style.showsKeys = keysBox.state == .on
         style.zoomScale = (scaleSlider.doubleValue * 10).rounded() / 10
         style.hold = (holdSlider.doubleValue * 2).rounded() / 2
         style.padding = paddingSlider.doubleValue.rounded()
@@ -230,6 +252,9 @@ final class StudioWindow: NSWindow {
         style.hold = saved["hold"] as? Double ?? style.hold
         style.padding = saved["padding"] as? Double ?? style.padding
         style.cornerRadius = saved["cornerRadius"] as? Double ?? style.cornerRadius
+        style.clickEffects = saved["clickEffects"] as? Bool ?? style.clickEffects
+        style.pointerHalo = saved["pointerHalo"] as? Bool ?? style.pointerHalo
+        style.showsKeys = saved["showsKeys"] as? Bool ?? style.showsKeys
         if let index = saved["background"] as? Int, backgrounds.indices.contains(index) { style.background = backgrounds[index].1 }
         return style
     }
@@ -243,7 +268,8 @@ final class StudioWindow: NSWindow {
             }
         } ?? 0
         UserDefaults.standard.set(["zooms": style.zooms, "zoomScale": style.zoomScale, "hold": style.hold, "padding": style.padding,
-                                   "cornerRadius": style.cornerRadius, "background": index], forKey: styleKey)
+                                   "cornerRadius": style.cornerRadius, "background": index, "clickEffects": style.clickEffects,
+                                   "pointerHalo": style.pointerHalo, "showsKeys": style.showsKeys], forKey: styleKey)
     }
 
     // MARK: Playing
@@ -264,9 +290,9 @@ final class StudioWindow: NSWindow {
     /// The finish for the current style, applied to what's playing.
     private func compose() {
         composing?.cancel()
-        let style = style, plan = style.plan(for: timeline), scale = pixelsPerPoint, size = videoSize, asset = asset
+        let style = style, plan = style.plan(for: timeline), scale = pixelsPerPoint, size = videoSize, asset = asset, timeline = timeline
         composing = Task {
-            guard let composition = try? await Self.composition(for: asset, style: style, plan: plan, scale: scale, videoSize: size),
+            guard let composition = try? await Self.composition(for: asset, style: style, plan: plan, scale: scale, videoSize: size, timeline: timeline),
                   !Task.isCancelled else { return }
             player.currentItem?.videoComposition = composition
             exportButton.isEnabled = true
@@ -279,13 +305,18 @@ final class StudioWindow: NSWindow {
     }
 
     private static func composition(for asset: AVAsset, style: RecordingFinisher.Style, plan: ZoomPlan, scale: CGFloat,
-                                    videoSize: CGSize) async throws -> AVVideoComposition {
+                                    videoSize: CGSize, timeline: RecordingTimeline?) async throws -> AVVideoComposition {
         let composition = try await AVMutableVideoComposition.videoComposition(with: asset) { request in
-            let frame = RecordingFinisher.frame(request.sourceImage, at: request.compositionTime.seconds, plan: plan, scale: scale, style: style)
+            let frame = RecordingFinisher.frame(request.sourceImage, at: request.compositionTime.seconds, plan: plan, scale: scale, style: style,
+                                                timeline: timeline)
             request.finish(with: frame, context: nil)
         }
         composition.renderSize = RecordingFinisher.outputSize(video: videoSize, scale: scale, style: style)
         return composition
+    }
+
+    @objc private func guideClicked() {
+        GuideWindow.show(video: video)
     }
 
     // MARK: Exporting
@@ -311,16 +342,19 @@ final class StudioWindow: NSWindow {
         exportButton.isEnabled = false
         spinner.startAnimation(nil)
         status.stringValue = "正在导出…"
-        let style = style, plan = style.plan(for: timeline), scale = pixelsPerPoint, size = videoSize, asset = asset
+        let style = style, plan = style.plan(for: timeline), scale = pixelsPerPoint, size = videoSize, asset = asset, timeline = timeline
         Task {
             do {
-                let composition = try await Self.composition(for: asset, style: style, plan: plan, scale: scale, videoSize: size)
+                let composition = try await Self.composition(for: asset, style: style, plan: plan, scale: scale, videoSize: size, timeline: timeline)
                 guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
                     throw CocoaError(.featureUnsupported)
                 }
                 session.videoComposition = composition
                 try? FileManager.default.removeItem(at: url)
                 try await session.export(to: url, as: .mp4)
+                // The Mac's sound and the microphone, in one track every player plays.
+                status.stringValue = "正在合成声音…"
+                try await AudioMerger.mergeAudio(of: url)
                 status.stringValue = "已导出到“\(url.deletingLastPathComponent().lastPathComponent)”"
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             } catch {

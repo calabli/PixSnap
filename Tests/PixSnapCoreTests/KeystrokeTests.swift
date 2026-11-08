@@ -17,4 +17,11 @@ final class KeystrokeTests: XCTestCase {
         XCTAssertNil(Keystroke.label(keyCode: 0, modifiers: [], characters: "a"))
         XCTAssertNil(Keystroke.label(keyCode: 0, modifiers: [.shift], characters: "A"))
     }
+
+    func testSpelledOutForNewcomers() {
+        XCTAssertEqual(Keystroke.spelledOut("⇧⌘4"), "⇧ Shift + ⌘ Command + 4")
+        XCTAssertEqual(Keystroke.spelledOut("↩"), "↩ Return")
+        XCTAssertEqual(Keystroke.spelledOut("⌥←"), "⌥ Option + ←")
+    }
 }
+

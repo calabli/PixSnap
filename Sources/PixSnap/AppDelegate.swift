@@ -55,6 +55,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if arguments.contains("--settings") { settingsWindow.show() }
         if arguments.contains("--check-update") { Updater.shared.check(userInitiated: true) }
+        // `--guide <video.mp4> [--guide-export <folder>]`: 图文教程 for a recording, optionally exported straight away.
+        if let flag = arguments.firstIndex(of: "--guide"), arguments.indices.contains(flag + 1) {
+            let folder = arguments.firstIndex(of: "--guide-export").flatMap { arguments.indices.contains($0 + 1) ? URL(fileURLWithPath: arguments[$0 + 1], isDirectory: true) : nil }
+            GuideWindow.show(video: URL(fileURLWithPath: arguments[flag + 1]), exportTo: folder)
+        }
         // `--studio <video.mp4>`: 精修 for a recording (its timeline beside it, if any).
         if let flag = arguments.firstIndex(of: "--studio"), arguments.indices.contains(flag + 1) {
             let export = arguments.firstIndex(of: "--studio-export").flatMap { arguments.indices.contains($0 + 1) ? URL(fileURLWithPath: arguments[$0 + 1]) : nil }

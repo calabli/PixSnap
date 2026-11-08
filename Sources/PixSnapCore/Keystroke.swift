@@ -19,6 +19,22 @@ public enum Keystroke {
         return text + key
     }
 
+    /// A label as a caption a newcomer can read: "⌘ Command + ⇧ Shift + 4", "↩ Return".
+    public static func spelledOut(_ label: String) -> String {
+        let names: [Character: String] = ["⌃": "⌃ Control", "⌥": "⌥ Option", "⇧": "⇧ Shift", "⌘": "⌘ Command"]
+        let keyNames: [String: String] = ["↩": "↩ Return", "⌤": "⌤ Enter", "⇥": "⇥ Tab", "⌫": "⌫ Delete", "⌦": "⌦ Forward Delete",
+                                          "esc": "Esc", "空格": "Space"]
+        var parts: [String] = []
+        var rest = Substring(label)
+        while let first = rest.first, let name = names[first] {
+            parts.append(name)
+            rest = rest.dropFirst()
+        }
+        let key = String(rest)
+        parts.append(keyNames[key] ?? key)
+        return parts.joined(separator: " + ")
+    }
+
     private static let specialKeys: [UInt16: String] = [
         36: "↩", 76: "⌤", 48: "⇥", 49: "空格", 51: "⌫", 117: "⌦", 53: "esc",
         123: "←", 124: "→", 125: "↓", 126: "↑", 115: "↖", 119: "↘", 116: "⇞", 121: "⇟",

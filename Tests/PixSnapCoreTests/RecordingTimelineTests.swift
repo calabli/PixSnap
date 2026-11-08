@@ -59,4 +59,30 @@ final class RecordingTimelineTests: XCTestCase {
         let decoded = try JSONDecoder().decode(RecordingTimeline.self, from: JSONEncoder().encode(timeline))
         XCTAssertEqual(decoded, timeline)
     }
+
+    func testPointerInterpolatesBetweenSamples() {
+        var timeline = RecordingTimeline(width: 100, height: 100)
+        timeline.moves = [.init(t: 1, x: 0, y: 0), .init(t: 2, x: 1, y: 0.5), .init(t: 4, x: 1, y: 1)]
+        XCTAssertNil(timeline.pointer(at: 0.5))
+        XCTAssertEqual(timeline.pointer(at: 1.5)?.x ?? -1, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(timeline.pointer(at: 3)?.y ?? -1, 0.75, accuracy: 1e-9)
+        XCTAssertEqual(timeline.pointer(at: 9)?.y, 1)
+    }
+
+    func testGuideStepsFromClicksKeysAndMarks() {
+        var timeline = RecordingTimeline(width: 800, height: 600)
+        timeline.clicks = [
+            .init(t: 1, x: 0.2, y: 0.3, element: "隐私与安全性"),
+            .init(t: 3, x: 0.5, y: 0.5, element: "PixSnap"),
+            .init(t: 3.2, x: 0.5, y: 0.5, count: 2, element: "PixSnap"),
+            .init(t: 6, x: 0.7, y: 0.7, button: .right),
+        ]
+        timeline.keys = [.init(t: 2, label: "⌘F")]
+        timeline.marks = [8]
+        let steps = StepGuide.steps(from: timeline)
+        XCTAssertEqual(steps.map(\.title), ["点击“隐私与安全性”", "按 ⌘ Command + F", "双击“PixSnap”", "右键点击这里", "这一步"])
+        XCTAssertNil(steps[1].x)
+        XCTAssertTrue(StepGuide.markdown(title: "教程", steps: steps).contains("## 3. 双击“PixSnap”"))
+    }
 }
+

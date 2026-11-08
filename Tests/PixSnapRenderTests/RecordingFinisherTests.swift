@@ -50,4 +50,25 @@ final class RecordingFinisherTests: XCTestCase {
         XCTAssertGreaterThan(corner.2, corner.0)
         XCTAssertEqual(pixel(framed, 220, 120).0, 255)
     }
+
+    func testClickRippleAndKeyCaptionAreDrawn() {
+        var style = RecordingFinisher.Style(zooms: false)
+        style.background = nil
+        style.pointerHalo = false
+        var timeline = RecordingTimeline(width: 400, height: 200)
+        timeline.clicks = [RecordingTimeline.Click(t: 1, x: 0.75, y: 0.5)]
+        timeline.keys = [RecordingTimeline.Key(t: 1, label: "⌘F")]
+        let plain = CIImage(color: .white).cropped(to: CGRect(x: 0, y: 0, width: 400, height: 200))
+        let frame = RecordingFinisher.frame(plain, at: 1.05, plan: ZoomPlan(segments: []), scale: 1, style: style, timeline: timeline)
+        // Somewhere along the line right of the click at (300, 100), the ring: blue, not white.
+        let ring = (0 ..< 40).map { pixel(frame, 300 + CGFloat($0), 100) }.first { Int($0.2) - Int($0.0) > 60 }
+        XCTAssertNotNil(ring)
+        // The caption's dark pill near the bottom middle.
+        let caption = pixel(frame, 200, 40)
+        XCTAssertLessThan(caption.0, 150)
+        // Long after, nothing is drawn.
+        let later = RecordingFinisher.frame(plain, at: 5, plan: ZoomPlan(segments: []), scale: 1, style: style, timeline: timeline)
+        XCTAssertEqual(pixel(later, 200, 40).0, 255)
+    }
 }
+
