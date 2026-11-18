@@ -106,6 +106,7 @@ final class FloatingCaptureWindow: NSPanel {
         bar.onSave = { [weak self] in self?.saveImage() }
         bar.onClose = { [weak self] in self?.close() }
         bar.onDelete = { [weak self] in self?.deleteForGood() }
+        bar.onDeleteAsking = { [weak self] in self?.deleteFromMenu() }
 
         unpinButton.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "取消钉住")
         unpinButton.toolTip = "取消钉住，显示操作栏"
@@ -574,6 +575,10 @@ private final class ActionBar: NSVisualEffectView {
     var onClose: (() -> Void)?
     /// The delete button was clicked twice: delete for good.
     var onDelete: (() -> Void)?
+    /// 永久删除… in 更多: asks first, then deletes.
+    var onDeleteAsking: (() -> Void)?
+    private var isFavorite = false
+    private var selectsText = false
 
     private let toolControl: NSSegmentedControl
     private var undoButton: NSButton!
@@ -585,7 +590,8 @@ private final class ActionBar: NSVisualEffectView {
     var showsDelete = true {
         didSet { deleteButton.isHidden = !showsDelete }
     }
-    private var zoomLabel: NSButton!
+    private var moreButton: NSButton!
+    private var zoom: CGFloat = 1
 
     /// Only captures kept in history can be favorites.
     var showsFavorite = true {
@@ -614,29 +620,17 @@ private final class ActionBar: NSVisualEffectView {
 
         undoButton = button(nil, symbol: "arrow.uturn.backward", tip: "撤销", action: #selector(undo))
         favoriteButton = button(nil, symbol: "star", tip: "收藏：不会被自动清理，晾衣架上换成木夹子", action: #selector(favorite))
-        zoomLabel = NSButton(title: "100%", target: self, action: #selector(zoomReset))
-        zoomLabel.bezelStyle = .recessed
-        zoomLabel.showsBorderOnlyWhileMouseInside = true
-        zoomLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        zoomLabel.toolTip = "恢复原始大小（⌘0）"
-        zoomLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        // The everyday buttons; everything, these included, is under 更多.
+        moreButton = button("更多", symbol: "ellipsis.circle", tip: "全部功能：缩放、收藏、编辑模式、选取文字、大爆炸、翻译…", action: #selector(showMore))
         let views: [NSView] = [
             toolControl,
             undoButton,
             divider(),
-            button(nil, symbol: "minus.magnifyingglass", tip: "缩小（⌘−，也可以双指捏合）", action: #selector(zoomOut)),
-            zoomLabel,
-            button(nil, symbol: "plus.magnifyingglass", tip: "放大（⌘+）", action: #selector(zoomIn)),
-            divider(),
-            favoriteButton,
             button("钉住", symbol: "pin", tip: "钉在屏幕上：隐藏操作栏，只留图片，可拖动", action: #selector(pin)),
-            button("编辑模式", symbol: "slider.horizontal.3", tip: "更多编辑：颜色、粗细、裁剪等（双击图片）", action: #selector(edit)),
-            selectTextButtonView(),
-            button(nil, symbol: "sparkles", tip: "大爆炸：把图里的文字炸成一个个词，点选后复制或搜索", action: #selector(bigBang)),
-            button(nil, symbol: "translate", tip: "截图翻译：把图里的文字翻译后写回原来的位置，在本机完成", action: #selector(translate)),
             button("美化", symbol: "wand.and.stars", tip: "智能美化：识别截图内容（代码、文档、照片、界面…），配上合适的背景、圆角和阴影", action: #selector(beautify)),
-            dragHandle(),
             button("保存", symbol: "square.and.arrow.down", tip: "保存为 PNG，选择保存位置", action: #selector(save)),
+            dragHandle(),
+            moreButton,
             button("关闭", symbol: "xmark", tip: "关闭（Esc）", action: #selector(closeCapture)),
             divider(),
             // Last, where the hand goes first: copy, then delete.
@@ -673,10 +667,11 @@ private final class ActionBar: NSVisualEffectView {
     }
 
     func setZoom(_ zoom: CGFloat) {
-        zoomLabel.title = "\(Int((zoom * 100).rounded()))%"
+        self.zoom = zoom
     }
 
     func setFavorite(_ favorite: Bool) {
+        isFavorite = favorite
         favoriteButton.image = NSImage(systemSymbolName: favorite ? "star.fill" : "star", accessibilityDescription: favorite ? "取消收藏" : "收藏")
         favoriteButton.contentTintColor = favorite ? .systemYellow : nil
         favoriteButton.toolTip = favorite ? "取消收藏" : "收藏：不会被自动清理，晾衣架上换成木夹子"
@@ -693,17 +688,10 @@ private final class ActionBar: NSVisualEffectView {
         return button
     }
 
-    private var selectTextButton: NSButton!
     private static var deleteTip: String?
 
-    private func selectTextButtonView() -> NSButton {
-        selectTextButton = button(nil, symbol: "text.viewfinder", tip: "选取文字：像文档一样选择图里的文字并复制（再点一下退出）", action: #selector(copyText))
-        return selectTextButton
-    }
-
     func setSelectsText(_ on: Bool) {
-        selectTextButton.contentTintColor = on ? .controlAccentColor : nil
-        selectTextButton.state = on ? .on : .off
+        selectsText = on
     }
 
     private func deleteButtonView() -> NSButton {
@@ -772,6 +760,45 @@ private final class ActionBar: NSVisualEffectView {
     @objc private func translate() { onTranslate?() }
     @objc private func save() { onSave?() }
     @objc private func closeCapture() { onClose?() }
+    @objc private func deleteAsking() { onDeleteAsking?() }
+
+    // MARK: 更多
+
+    /// Every action, the bar's own included, in a menu under 更多.
+    @objc private func showMore() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func add(_ title: String, _ symbol: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = [],
+                 on: Bool = false, enabled: Bool = true) {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            item.target = self
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+            item.state = on ? .on : .off
+            item.isEnabled = enabled
+            menu.addItem(item)
+        }
+        add("复制", "doc.on.doc", #selector(copyImage), key: "c", modifiers: .command)
+        add("保存…", "square.and.arrow.down", #selector(save), key: "s", modifiers: .command)
+        add("撤销", "arrow.uturn.backward", #selector(undo), key: "z", modifiers: .command, enabled: undoButton.isEnabled)
+        menu.addItem(.separator())
+        add("放大", "plus.magnifyingglass", #selector(zoomIn), key: "+", modifiers: .command)
+        add("缩小", "minus.magnifyingglass", #selector(zoomOut), key: "-", modifiers: .command)
+        add("实际大小（\(Int((zoom * 100).rounded()))%）", "1.magnifyingglass", #selector(zoomReset), key: "0", modifiers: .command)
+        menu.addItem(.separator())
+        if !favoriteButton.isHidden { add(isFavorite ? "取消收藏" : "收藏", isFavorite ? "star.fill" : "star", #selector(favorite)) }
+        add("钉住", "pin", #selector(pin))
+        add("编辑模式", "slider.horizontal.3", #selector(edit))
+        add("美化", "wand.and.stars", #selector(beautify))
+        menu.addItem(.separator())
+        add("选取文字", "text.viewfinder", #selector(copyText), on: selectsText)
+        add("大爆炸", "sparkles", #selector(bigBang))
+        add("截图翻译", "translate", #selector(translate))
+        menu.addItem(.separator())
+        add("关闭", "xmark", #selector(closeCapture))
+        if showsDelete { add("永久删除…", "trash", #selector(deleteAsking)) }
+        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: moreButton.bounds.maxY + 4), in: moreButton)
+    }
 }
 
 /// "拖出": looks like the bar's other buttons, but it's dragged rather than clicked.
