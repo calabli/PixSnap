@@ -627,6 +627,8 @@ final class CaptureCoordinator {
         floating.onClosed = { [weak self] window in self?.floatingCaptures.removeAll { $0 === window } }
         floatingCaptures.append(floating)
         floating.orderFrontRegardless()
+        // The bar is up straight away: copy and delete are one click from the capture.
+        floating.showBar()
     }
 
     /// Development: a long screenshot of `region` (global AppKit coordinates) without selecting it,

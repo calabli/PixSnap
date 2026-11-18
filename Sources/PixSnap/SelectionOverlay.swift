@@ -3,8 +3,7 @@ import PixSnapCore
 import PixSnapRender
 
 /// A full-screen window over one display that shows the frozen screenshot and lets the user
-/// drag a region or click a highlighted window. A dragged region stays up to be moved or resized
-/// until it's confirmed (Return, a double-click, or the ✓ button).
+/// drag a region or click a highlighted window. Letting go of the drag takes the region.
 @MainActor
 final class SelectionWindow: NSWindow {
     let selectionView: SelectionView
@@ -72,7 +71,6 @@ final class SelectionView: NSView {
     private let crosshairX = CALayer()
     private let crosshairY = CALayer()
     private let sizeLabel = SizeLabelView()
-    private let toolbar = SelectionToolbar()
     private let magnifier: MagnifierView
     /// Height of the camera notch at the top of the screen (0 without one); the size label and the
     /// magnifier stay below it so they're never hidden behind it.
@@ -112,9 +110,6 @@ final class SelectionView: NSView {
         addSubview(shapes)
         addSubview(sizeLabel)
         addSubview(magnifier)
-        addSubview(toolbar)
-        toolbar.onConfirm = { [weak self] in self?.confirm() }
-        toolbar.onCancel = { [weak self] in self?.onCancel?() }
         updateOverlay()
     }
 
@@ -221,6 +216,11 @@ final class SelectionView: NSView {
             }
             return
         }
+        // Letting go of a drawn region takes it; nothing waits to be confirmed.
+        if case .drawing = finished, selection != nil {
+            confirm()
+            return
+        }
         updateOverlay()
         updateCursor()
     }
@@ -317,9 +317,7 @@ final class SelectionView: NSView {
         case .moving: cursor = .closedHand
         case .resizing(let handle, _, _): cursor = Self.cursor(for: handle)
         case nil:
-            if !toolbar.isHidden, toolbar.frame.contains(mouse) {
-                cursor = .arrow
-            } else if let selection, let handle = SelectionGeometry.handle(at: mouse, in: selection, tolerance: Self.grabTolerance) {
+            if let selection, let handle = SelectionGeometry.handle(at: mouse, in: selection, tolerance: Self.grabTolerance) {
                 cursor = Self.cursor(for: handle)
             } else if let selection, selection.contains(mouse) {
                 cursor = .openHand
@@ -394,9 +392,6 @@ final class SelectionView: NSView {
         sizeLabel.isHidden = highlight == nil
         if let highlight { placeSizeLabel(for: highlight) }
 
-        // The ✓ / ✕ buttons wait under a selection that's been let go.
-        toolbar.isHidden = selection == nil || drag != nil
-        if let selection, drag == nil { placeToolbar(for: selection) }
 
         // While a selection is waiting, the loupe only comes back for dragging its edges.
         let showsMagnifier = mouseInside && (selection == nil || drag != nil)
@@ -420,18 +415,6 @@ final class SelectionView: NSView {
         sizeLabel.frame = CGRect(origin: origin, size: size)
     }
 
-    /// Below the selection's bottom-right corner; above it, or inside it, when there's no room.
-    private func placeToolbar(for rect: CGRect) {
-        let size = toolbar.fittingSize
-        let area = labelBounds
-        var origin = CGPoint(x: rect.maxX - size.width, y: rect.minY - size.height - 8)
-        if origin.y < area.minY {
-            origin.y = rect.maxY + 8 + size.height <= area.maxY ? rect.maxY + 8 : rect.minY + 8
-        }
-        origin.x = min(max(origin.x, area.minX + 4), area.maxX - size.width - 4)
-        toolbar.frame = CGRect(origin: origin, size: size)
-    }
-
     /// Where the size label and magnifier may go: the screen minus the notch strip at the top.
     private var labelBounds: CGRect {
         CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: bounds.height - topInset)
@@ -441,55 +424,6 @@ final class SelectionView: NSView {
 /// A view that never takes mouse events, so clicks reach the selection view underneath.
 private class PassthroughView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-/// ✕ and ✓ under a selection that's waiting to be confirmed.
-@MainActor
-private final class SelectionToolbar: NSVisualEffectView {
-    var onConfirm: (() -> Void)?
-    var onCancel: (() -> Void)?
-
-    private let stack = NSStackView()
-
-    init() {
-        super.init(frame: .zero)
-        material = .hudWindow
-        blendingMode = .withinWindow
-        state = .active
-        appearance = NSAppearance(named: .darkAqua)
-        wantsLayer = true
-        layer?.cornerRadius = 7
-        layer?.masksToBounds = true
-        stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 3, left: 4, bottom: 3, right: 4)
-        stack.addArrangedSubview(button(symbol: "xmark", tip: "取消（Esc）", action: #selector(cancel)))
-        let done = button(symbol: "checkmark", tip: "完成截图（回车，或双击选区）", action: #selector(confirm))
-        done.contentTintColor = .controlAccentColor
-        stack.addArrangedSubview(done)
-        stack.frame = CGRect(origin: .zero, size: stack.fittingSize)
-        addSubview(stack)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    override var fittingSize: NSSize { stack.fittingSize }
-
-    private func button(symbol: String, tip: String, action: Selector) -> NSButton {
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)!
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .semibold))!
-        let button = NSButton(image: image, target: self, action: action)
-        button.bezelStyle = .recessed
-        button.showsBorderOnlyWhileMouseInside = true
-        button.imagePosition = .imageOnly
-        button.toolTip = tip
-        button.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 24).isActive = true
-        return button
-    }
-
-    @objc private func confirm() { onConfirm?() }
-    @objc private func cancel() { onCancel?() }
 }
 
 /// "1280 × 720" above the selection.

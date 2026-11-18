@@ -2,10 +2,10 @@ import AppKit
 import PixSnapCore
 import VisionKit
 
-/// A finished capture floating on screen where it was taken. Clicking the image shows the bar
-/// underneath (and clicking again hides it): quick annotation tools that draw right on the image,
-/// zoom, favorite (when it's in history), pin, edit mode, copy, 美化, save, delete (from history, for
-/// good) and close. ⌘+ / ⌘− / ⌘0 and
+/// A finished capture floating on screen where it was taken, with the bar underneath (clicking the
+/// image hides it and shows it again): quick annotation tools that draw right on the image, zoom,
+/// favorite (when it's in history), pin, edit mode, 美化, save, close, and last copy and delete
+/// (from history, for good). ⌘+ / ⌘− / ⌘0 and
 /// pinching zoom too. 选取文字 turns on Live Text: the text in the image is highlighted and can be
 /// selected like a document's (drag, double-click a word), ⌘C copying the selection — or, with
 /// nothing selected, all of it. With no tool
@@ -631,15 +631,17 @@ private final class ActionBar: NSVisualEffectView {
             favoriteButton,
             button("钉住", symbol: "pin", tip: "钉在屏幕上：隐藏操作栏，只留图片，可拖动", action: #selector(pin)),
             button("编辑模式", symbol: "slider.horizontal.3", tip: "更多编辑：颜色、粗细、裁剪等（双击图片）", action: #selector(edit)),
-            button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
             selectTextButtonView(),
             button(nil, symbol: "sparkles", tip: "大爆炸：把图里的文字炸成一个个词，点选后复制或搜索", action: #selector(bigBang)),
             button(nil, symbol: "translate", tip: "截图翻译：把图里的文字翻译后写回原来的位置，在本机完成", action: #selector(translate)),
             button("美化", symbol: "wand.and.stars", tip: "智能美化：识别截图内容（代码、文档、照片、界面…），配上合适的背景、圆角和阴影", action: #selector(beautify)),
             dragHandle(),
             button("保存", symbol: "square.and.arrow.down", tip: "保存为 PNG，选择保存位置", action: #selector(save)),
-            deleteButtonView(),
             button("关闭", symbol: "xmark", tip: "关闭（Esc）", action: #selector(closeCapture)),
+            divider(),
+            // Last, where the hand goes first: copy, then delete.
+            button("复制", symbol: "doc.on.doc", tip: "复制到剪贴板", action: #selector(copyImage)),
+            deleteButtonView(),
         ]
         let stack = NSStackView(views: views)
         stack.spacing = 4
